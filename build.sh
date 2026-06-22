@@ -10,7 +10,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
 echo "Compiling…"
-swiftc -O Sources/*.swift -o "$BIN" -framework Cocoa
+# Pin the deployment target, else swiftc stamps the binary with the build machine's OS
+# (e.g. macOS 26), making it refuse to launch on older systems despite LSMinimumSystemVersion.
+swiftc -O -target arm64-apple-macos12.0 Sources/*.swift -o "$BIN" -framework Cocoa
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,8 +23,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Claude Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.local.claudestatusbar</string>
   <key>CFBundleExecutable</key><string>ClaudeStatusBar</string>
-  <key>CFBundleVersion</key><string>0.0.3</string>
-  <key>CFBundleShortVersionString</key><string>0.0.3</string>
+  <key>CFBundleVersion</key><string>0.0.4</string>
+  <key>CFBundleShortVersionString</key><string>0.0.4</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>

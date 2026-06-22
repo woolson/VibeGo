@@ -3,6 +3,11 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.4] - 2026-06-22
+
+### Fixed
+- The app now actually runs on macOS 12 (Monterey) and later, as the README states. Earlier builds were compiled without a pinned deployment target, so the binary inherited the build machine's OS (macOS 26) and refused to launch on anything older, despite the stated 12.0 requirement. The build now targets macOS 12.0 explicitly.
+
 ## [0.0.3] - 2026-06-22
 
 ### Changed
@@ -39,6 +44,7 @@ All notable changes to Claude Status Bar are documented here. This project follo
 - Signed and notarized DMG so it opens without a Gatekeeper warning.
 - Claude Code plugin marketplace manifest for the plugin install path.
 
+[0.0.4]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.4
 [0.0.3]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.3
 [0.0.2]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.2
 [0.0.1]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.1
