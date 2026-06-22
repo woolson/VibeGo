@@ -70,7 +70,7 @@ Installs the hooks (status + open/close lifecycle) automatically from inside Cla
 /plugin install claude-status-bar@claude-status-bar
 ```
 
-You'll still drag the app into Applications once (the plugin launches it on session start).
+The plugin installs the hooks but not the app itself, so drag **Claude Status Bar** into Applications once (from the DMG). The plugin launches it automatically on session start.
 
 ### Using the Claude Code desktop app? Hide its built-in icon
 
