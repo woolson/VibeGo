@@ -78,7 +78,7 @@ The desktop app shows its own menu bar icon (the quick-screenshot one). To avoid
 
 ## How it works
 
-Claude Code fires hooks on its lifecycle events. Small scripts write the current status to `~/.claude/statusbar/state.json`; the menu bar app polls that file and renders the spark + label. Two `SessionStart` / `SessionEnd` hooks launch the app when Claude Code opens and quit it when the **last** session closes (a session counter handles multiple windows).
+Claude Code fires hooks on its lifecycle and tool events. Small scripts write the current status to `~/.claude/statusbar/state.json`; the menu bar app polls that file and renders the spark + label. The `SessionStart` hook launches the app when Claude Code opens (in the terminal, the desktop app, or a new conversation). The app then quits itself once Claude is gone, that is, when the Claude desktop app isn't running and no Claude Code session is active. Active sessions are tracked as one small file each under `~/.claude/statusbar/sessions.d/`, so any working session keeps the bar up.
 
 The installer merges its hooks into `~/.claude/settings.json` without touching your existing hooks, and backs the file up first (`settings.json.bak-statusbar`).
 
