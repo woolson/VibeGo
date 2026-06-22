@@ -13,6 +13,7 @@ All notable changes to Claude Status Bar are documented here. This project follo
 
 ### Fixed
 - The menu bar icon now reliably disappears when you quit the Claude desktop app, detected directly rather than relying on the session-end hook (which is unreliable during app shutdown).
+- Upgrades now self-heal: the app re-runs its installer when the version changes, so updating from an older version refreshes the hooks and removes the old background watcher without any manual step. Previously the installer only ran on a first-ever install.
 
 ## [0.0.2] - 2026-06-21
 

@@ -69,11 +69,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         ensureHooksInstalled()
     }
 
-    // On first launch, wire up the Claude Code hooks ourselves (runs the bundled installer),
-    // so the user just drags the app in and opens it — no manual Terminal step.
+    // Wire up the Claude Code hooks ourselves by running the bundled installer, so the
+    // user just drags the app in and opens it — no manual Terminal step. Runs on first
+    // install AND whenever the version changes, so upgrades pick up new/changed hooks and
+    // retire old artifacts (e.g. the 0.0.2 background watcher). install.js is idempotent.
     func ensureHooksInstalled() {
         let d = UserDefaults.standard
-        guard !d.bool(forKey: "hooksInstalled"),
+        let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
+        guard d.string(forKey: "installedVersion") != current,
               let installer = Bundle.main.path(forResource: "install", ofType: "js") else { return }
         DispatchQueue.global().async {
             let task = Process()
@@ -81,7 +84,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             task.arguments = ["-lc", "node \"\(installer)\""]
             try? task.run()
             task.waitUntilExit()
-            if task.terminationStatus == 0 { UserDefaults.standard.set(true, forKey: "hooksInstalled") }
+            if task.terminationStatus == 0 { UserDefaults.standard.set(current, forKey: "installedVersion") }
         }
     }
 
