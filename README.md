@@ -1,6 +1,7 @@
-
 <img width="672" height="80" alt="Screen Recording 2026-06-23 at 3 57 47 AM 2" src="https://github.com/user-attachments/assets/97876ac9-cd4f-431b-873a-93220de5bd99" />
+<br><br>
 
+<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="260"></a>
 <br>
 
 ## Claude Status Bar
@@ -9,16 +10,10 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 
 _Built so you can tab away during a long "thinking" stretch and still see, at a glance, whether Claude is working, waiting on you, or done._
 
+Signed and notarized. Open it, drag the app to Applications, launch once.
 
 <img width="1016" height="566" alt="Claude Status Bar demo" src="https://github.com/user-attachments/assets/55a7b294-e893-4f73-b16b-b8beef784400" />
-
-<br><br>
-
-<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="260"></a>
-
-<br>
-
-Signed and notarized. Open it, drag the app to Applications, launch once.
+<img width="656" height="883" alt="Screenshot 2026-06-25 at 5 27 42 AM" src="https://github.com/user-attachments/assets/7a164fda-ea23-434f-a13a-18ad7bcb1b25" />
 
 ---
 
