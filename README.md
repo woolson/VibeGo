@@ -1,10 +1,10 @@
 <img width="672" height="80" alt="Screen Recording 2026-06-23 at 3 57 47 AM 2" src="https://github.com/user-attachments/assets/97876ac9-cd4f-431b-873a-93220de5bd99" />
 <br><br>
 
-<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/VibeGo.dmg"><img src="assets/download.png" alt="Download VibeGo.dmg for macOS" width="260"></a>
+<a href="https://github.com/woolson/VibeGo/releases/latest/download/VibeGo.dmg"><img src="assets/download.png" alt="Download VibeGo.dmg for macOS" width="260"></a>
 <br>
 
-## VibeGo
+## vibego
 
 A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude icon while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. Lightweight, no window, no dock icon, no usage dashboards.
 
@@ -17,7 +17,7 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 > **Multi-session support.** This is built for one active Claude Code session at a time. If you
 > run multiple sessions at once (several terminals, or a terminal plus the desktop app), the menu
 > bar follows the most recently active one. Here is the why, and how you can add it yourself:
-> **[read the story →](https://github.com/m1ckc3s/claude-status-bar/issues/8)**
+> **[read the story →](https://github.com/woolson/VibeGo/issues/8)**
 
 ---
 
@@ -65,7 +65,7 @@ Everything is controlled from the menu:
 Signed and notarized. Open it, drag the app to Applications, launch once.
 
 1. Download the latest `VibeGo.dmg` from [Releases](../../releases).
-2. Open it and drag **VibeGo** into Applications.
+2. Open it and drag **vibego** into Applications.
 3. Launch it once. On first launch it wires up the Claude Code hooks for you automatically.
 4. Start a new Claude Code session, the icon appears whenever Claude Code is running.
 
@@ -79,11 +79,11 @@ Launch it once, it refreshes its hooks on a version change, then restart Claude 
 Installs the hooks (status + open/close lifecycle) automatically from inside Claude Code:
 
 ```
-/plugin marketplace add m1ckc3s/claude-status-bar
-/plugin install claude-status-bar@claude-status-bar
+/plugin marketplace add woolson/VibeGo
+/plugin install vibego@VibeGo
 ```
 
-The plugin installs the hooks but not the app itself, so drag **VibeGo** into Applications once (from the DMG). The plugin launches it automatically on session start.
+The plugin installs the hooks but not the app itself, so drag **vibego** into Applications once (from the DMG). The plugin launches it automatically on session start.
 
 ## How it works
 

@@ -1,0 +1,15 @@
+<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <mask id="v-cutout">
+      <rect width="18" height="18" fill="black"/>
+      <circle cx="9" cy="9" r="7.83" fill="white"/>
+      <path d="M4.46 11.09 C5.81 9.74 6.73 6 8.68 5.51 C10.62 5.08 11.43 10.2 13.81 11.68"
+            fill="none"
+            stroke="black"
+            stroke-width="3"
+            stroke-linecap="round"
+            stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <circle cx="9" cy="9" r="7.83" fill="white" mask="url(#v-cutout)"/>
+</svg>

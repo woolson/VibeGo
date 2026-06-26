@@ -12,7 +12,12 @@ mkdir -p "$APP/Contents/MacOS"
 echo "Compiling…"
 # Pin the deployment target, else swiftc stamps the binary with the build machine's OS
 # (e.g. macOS 26), making it refuse to launch on older systems despite LSMinimumSystemVersion.
-swiftc -O -target arm64-apple-macos12.0 Sources/*.swift -o "$BIN" -framework Cocoa
+TMP_ARM64="build/VibeGo-arm64"
+TMP_X86_64="build/VibeGo-x86_64"
+swiftc -O -target arm64-apple-macos12.0 Sources/*.swift -o "$TMP_ARM64" -framework Cocoa
+swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$TMP_X86_64" -framework Cocoa
+lipo -create "$TMP_ARM64" "$TMP_X86_64" -output "$BIN"
+rm -f "$TMP_ARM64" "$TMP_X86_64"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -43,12 +48,12 @@ cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
 # For a clean (no Gatekeeper warning) release you need, set up once on this Mac:
 #   1. A "Developer ID Application" certificate in your keychain (Xcode > Settings > Accounts).
 #   2. A notarytool credential profile:
-#        xcrun notarytool store-credentials "claude-statusbar" \
+#        xcrun notarytool store-credentials "VibeGo" \
 #          --apple-id you@example.com --team-id W9JZ4932LA --password <app-specific-password>
 # Then `./build.sh --dmg` auto-signs + notarizes. Without a cert it falls back to an
 # ad-hoc dev build (runnable locally; users would need right-click > Open once).
 TEAM_ID="W9JZ4932LA"
-NOTARY_PROFILE="${NOTARY_PROFILE:-claude-statusbar}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-VibeGo}"
 
 SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
   | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)"

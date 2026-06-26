@@ -8,7 +8,7 @@ const path = require("path");
 const cp = require("child_process");
 
 const BUNDLE_ID = "com.local.vibego";
-const OLD_BUNDLE_ID = "com.local.claudestatusbar";
+const quitSuppressPath = path.join(os.homedir(), ".vibego", "quit-suppressed");
 const dir = path.join(os.homedir(), ".codex", "statusbar");
 const sessDir = path.join(dir, "sessions.d");
 const stateDir = path.join(dir, "states.d");
@@ -43,10 +43,8 @@ function run() {
 }
 
 function launchApp() {
+  if (fs.existsSync(quitSuppressPath)) return;
   const child = cp.spawn("open", ["-g", "-b", BUNDLE_ID], { stdio: "ignore", detached: true });
-  child.on("error", () => {
-    cp.spawn("open", ["-g", "-b", OLD_BUNDLE_ID], { stdio: "ignore", detached: true }).unref();
-  });
   child.unref();
 }
 

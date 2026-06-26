@@ -1,8 +1,8 @@
 # Build from source
 
 ```bash
-git clone https://github.com/m1ckc3s/claude-status-bar
-cd claude-status-bar
+git clone https://github.com/woolson/VibeGo
+cd VibeGo
 ./build.sh            # builds build/VibeGo.app
 ./build.sh --dmg      # also produces build/VibeGo.dmg
 ```

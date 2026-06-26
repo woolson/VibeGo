@@ -64,6 +64,10 @@ final class SessionRowView: NSView {
     }
 }
 
+final class PassthroughVisualEffectView: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
         var drawingRect = super.drawingRect(forBounds: rect)
@@ -92,6 +96,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     let codexSessionIndexPath = (NSHomeDirectory() as NSString).appendingPathComponent(".codex/session_index.jsonl")
     let claudeHistoryPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/history.jsonl")
     let claudeProjectsRoot = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    let quitSuppressPath = (NSHomeDirectory() as NSString).appendingPathComponent(".vibego/quit-suppressed")
     let claudeDesktopBundleID = "com.anthropic.claudefordesktop"
     let codexBundleID = "com.openai.codex"
 
@@ -102,11 +107,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     var pollTimer: Timer?
     var animTimer: Timer?
     var frameIdx = 0
-
-    let launchedAt = Date()
-    var notNeededSince: Date?
-    let launchGrace: TimeInterval = 5   // settle time after launch before we may quit
-    let idleQuitDelay: TimeInterval = 3 // "not needed" must persist this long before quitting
 
     var claudeCurrent: [String: Any] = [:]
     var codexCurrent: [String: Any] = [:]
@@ -151,6 +151,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     }()
     var prevEff = ""               // last effective state, for detecting turn completion
     var lastTurnStart: Double = 0  // active turn's start time, for the 1-minute gate
+    var showCompletionPopup = true // drop a toast under the icon when a turn finishes
+    var prevClaudeState = ""       // per-agent last state, for the completion popup
+    var prevCodexState = ""
+    var didObserveCompletionStates = false
+    var completionWindow: NSPanel?
+    var completionPopoverTimer: Timer?
+    var completionPopoverPositionTimer: Timer?
+    var completionPopoverStatus: AgentStatus?
     var iconColor: NSColor? { iconSystem ? nil : brand } // nil => render as an adaptive template
     let codeGlyphs = ["✻", "✽", "✶", "✳", "✢"]
     let codePeaks: [CGFloat] = [1.0, 1.0, 1.0, 1.0, 1.0]
@@ -199,6 +207,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         var ts: Double
         var transcript: String
         var client: String = ""
+        var terminalApp: String = ""
+        var terminalBundleId: String = ""
+        var tty: String = ""
         var isActive: Bool { state == "thinking" || state == "tool" || state == "permission" || state == "waiting" }
         var isAnimating: Bool { state == "thinking" || state == "tool" }
     }
@@ -209,11 +220,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
+        if d.object(forKey: "completionPopup") != nil { showCompletionPopup = d.bool(forKey: "completionPopup") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
+        clearUserQuitSuppression()
         configureStatusItem(claudeStatusItem)
         configureStatusItem(codexStatusItem)
-        setStatusItem(codexStatusItem, icon: appIcon(for: "Codex"), label: "", startedAt: 0, hidden: true)
-        setStatusItem(claudeStatusItem, icon: appIcon(for: "Claude"), label: "", startedAt: 0)
+        setStatusItem(codexStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: true)
+        setStatusItem(claudeStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0)
         let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
@@ -238,7 +251,7 @@ final class StatusController: NSObject, NSMenuDelegate {
               let installer = Bundle.main.path(forResource: "install", ofType: "js") else { return }
         DispatchQueue.global().async {
             guard let node = Self.locateNode() else {
-                NSLog("VibeGo: could not find node; hooks not installed (will retry next launch)")
+                NSLog("vibego: could not find node; hooks not installed (will retry next launch)")
                 return
             }
             let task = Process()
@@ -288,8 +301,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: update check
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
-    let releaseAPIURL = "https://api.github.com/repos/m1ckc3s/claude-status-bar/releases/latest"
-    let releasePageURL = "https://github.com/m1ckc3s/claude-status-bar/releases/latest"
+    let releaseAPIURL = "https://api.github.com/repos/woolson/VibeGo/releases/latest"
+    let releasePageURL = "https://github.com/woolson/VibeGo/releases/latest"
 
     // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
     // See CLAUDE.md "Update check" for the privacy/behavior notes.
@@ -299,7 +312,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if now - d.double(forKey: "lastUpdateCheck") < 86400 { return }
         guard let url = URL(string: releaseAPIURL) else { return }
         var req = URLRequest(url: url)
-        req.setValue("VibeGo", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
+        req.setValue("vibego", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
         URLSession.shared.dataTask(with: req) { data, _, _ in
             guard let data = data,
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -345,7 +358,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             up.target = self
             menu.addItem(up)
         }
-        let q = NSMenuItem(title: "Quit VibeGo", action: #selector(quit), keyEquivalent: "q")
+        let q = NSMenuItem(title: "Quit vibego", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
     }
@@ -363,25 +376,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         if #available(macOS 14.0, *) { soundItem.badge = NSMenuItemBadge(string: "1m+") }
         menu.addItem(soundItem)
 
-        menu.addItem(.separator())
-        menu.addItem(header("Animation"))
-        for (style, name) in [(AnimStyle.web, "Claude Spark"), (AnimStyle.code, "Claude Code"), (AnimStyle.crab, "Crab Walking")] {
-            let it = NSMenuItem(title: name, action: #selector(chooseStyle(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = style.rawValue
-            it.state = animStyle == style ? .on : .off
-            menu.addItem(it)
-        }
-
-        menu.addItem(.separator())
-        menu.addItem(header("Color"))
-        for (sys, name) in [(false, "Orange"), (true, "System")] {
-            let it = NSMenuItem(title: name, action: #selector(chooseColor(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = sys
-            it.state = iconSystem == sys ? .on : .off
-            menu.addItem(it)
-        }
+        let popupItem = NSMenuItem(title: "Show Completion Popup", action: #selector(togglePopup), keyEquivalent: "")
+        popupItem.target = self
+        popupItem.state = showCompletionPopup ? .on : .off
+        menu.addItem(popupItem)
         return menu
     }
 
@@ -395,7 +393,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let claudeHeight = sectionHeight(rowCount: claudeRows.count)
         let codexHeight = sectionHeight(rowCount: codexRows.count)
         let topPadding: CGFloat = 8
-        let bottomPadding: CGFloat = 8
+        let bottomPadding: CGFloat = 1
         let sectionGap: CGFloat = 22
         let totalHeight = topPadding + claudeHeight + sectionGap + codexHeight + bottomPadding
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: totalHeight))
@@ -447,7 +445,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             rowY -= 22
         }
         if sessions.count > visibleSessionLimit {
-            parent.addSubview(menuLabel("+\(sessions.count - visibleSessionLimit) more sessions", x: 38, y: rowY, width: width - 52, size: 11, color: .tertiaryLabelColor))
+            parent.addSubview(menuLabel("+\(sessions.count - visibleSessionLimit) more sessions", x: 38, y: rowY - 4, width: width - 52, size: 11, color: .tertiaryLabelColor))
         }
     }
 
@@ -478,10 +476,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             dot.layer?.add(pulse, forKey: "breath")
         }
         row.addSubview(dot)
-        row.addSubview(menuLabel(sessionTitle(status), x: 28, y: 2, width: 148, height: 18, size: 11, color: .labelColor, centerVertically: true))
-        row.addSubview(menuLabel(clientText(status), x: 180, y: 2, width: 24, height: 18, size: 10, color: .tertiaryLabelColor, centerVertically: true))
-        row.addSubview(menuLabel(statusText(status), x: 208, y: 2, width: 88, height: 18, size: 11, color: .secondaryLabelColor, centerVertically: true))
-        row.addSubview(menuLabel(projectText(status), x: 300, y: 2, width: 64, height: 18, size: 11, color: .tertiaryLabelColor, alignRight: true, centerVertically: true))
+        row.addSubview(menuLabel(sessionTitle(status), x: 28, y: 2, width: 228, height: 18, size: 11, color: .labelColor, centerVertically: true))
+        row.addSubview(menuLabel(statusText(status), x: 260, y: 2, width: 104, height: 18, size: 10, color: .secondaryLabelColor, alignRight: true, centerVertically: true))
 
         let clickArea = NSButton(frame: row.bounds)
         clickArea.title = ""
@@ -522,13 +518,14 @@ final class StatusController: NSObject, NSMenuDelegate {
                 return $0.ts > $1.ts
             }
         }
-        // Idle: keep the 3 most recent finished tasks visible (they survive as long as the
-        // session is open; SessionEnd deletes the state file and removes them).
-        if !done.isEmpty { return Array(done.prefix(3)) }
+        // Idle: keep finished tasks available so the menu can show the first few plus
+        // a "+n more sessions" overflow row.
+        if !done.isEmpty { return done }
         return fallback.isActive ? [fallback] : []
     }
 
     func sectionHeight(rowCount: Int) -> CGFloat {
+        if rowCount == 0 { return 53 }
         let rows = rowCount > 3 ? 4 : max(1, rowCount)
         return CGFloat(44 + rows * 22)
     }
@@ -720,13 +717,31 @@ final class StatusController: NSObject, NSMenuDelegate {
         return it
     }
 
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() {
+        markUserQuitSuppressed()
+        NSApp.terminate(nil)
+    }
+
+    func markUserQuitSuppressed() {
+        let fm = FileManager.default
+        let dir = (quitSuppressPath as NSString).deletingLastPathComponent
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let payload = "\(Date().timeIntervalSince1970)\n"
+        try? payload.write(toFile: quitSuppressPath, atomically: true, encoding: .utf8)
+    }
+
+    func clearUserQuitSuppression() {
+        try? FileManager.default.removeItem(atPath: quitSuppressPath)
+    }
 
     func openConversation(_ status: AgentStatus) {
         let ws = NSWorkspace.shared
-        if status.client.lowercased() == "cli", let transcript = transcriptPath(for: status) {
-            ws.open(URL(fileURLWithPath: transcript))
-            return
+        if status.client.lowercased() == "cli" {
+            if openTerminalSession(status) { return }
+            if let transcript = transcriptPath(for: status) {
+                ws.open(URL(fileURLWithPath: transcript))
+                return
+            }
         }
         if let url = conversationURL(for: status) {
             ws.open(url)
@@ -737,6 +752,76 @@ final class StatusController: NSObject, NSMenuDelegate {
             return
         }
         openAgentApp(status.source)
+    }
+
+    func openTerminalSession(_ status: AgentStatus) -> Bool {
+        let bundleID = status.terminalBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tty = status.tty.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tty.isEmpty {
+            if bundleID == "com.apple.Terminal", runAppleScript(terminalSelectScript(tty: tty)) { return true }
+            if bundleID == "com.googlecode.iterm2", runAppleScript(iTermSelectScript(tty: tty)) { return true }
+        }
+        guard !bundleID.isEmpty,
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return false }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        return true
+    }
+
+    func terminalSelectScript(tty: String) -> String {
+        let escapedTTY = appleScriptString(tty)
+        return """
+        tell application id "com.apple.Terminal"
+          activate
+          repeat with w in windows
+            repeat with t in tabs of w
+              try
+                if (tty of t as string) is equal to \(escapedTTY) then
+                  set selected tab of w to t
+                  set index of w to 1
+                  return true
+                end if
+              end try
+            end repeat
+          end repeat
+        end tell
+        return false
+        """
+    }
+
+    func iTermSelectScript(tty: String) -> String {
+        let escapedTTY = appleScriptString(tty)
+        return """
+        tell application id "com.googlecode.iterm2"
+          activate
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                try
+                  if (tty of s as string) is equal to \(escapedTTY) then
+                    select s
+                    select t
+                    set index of w to 1
+                    return true
+                  end if
+                end try
+              end repeat
+            end repeat
+          end repeat
+        end tell
+        return false
+        """
+    }
+
+    func runAppleScript(_ script: String) -> Bool {
+        let appleScript = NSAppleScript(source: script)
+        var error: NSDictionary?
+        let result = appleScript?.executeAndReturnError(&error)
+        if error != nil { return false }
+        return result?.booleanValue == true
+    }
+
+    func appleScriptString(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     func conversationURL(for status: AgentStatus) -> URL? {
@@ -784,6 +869,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         UserDefaults.standard.set(playCompletionSound, forKey: "completionSound")
     }
 
+    @objc func togglePopup() {
+        showCompletionPopup.toggle()
+        UserDefaults.standard.set(showCompletionPopup, forKey: "completionPopup")
+    }
+
     @objc func chooseColor(_ sender: NSMenuItem) {
         guard let sys = sender.representedObject as? Bool else { return }
         iconSystem = sys
@@ -803,7 +893,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: state polling
 
     func tick() {
-        checkLifecycle()
         let fm = FileManager.default
         if let attrs = try? fm.attributesOfItem(atPath: statePath),
            let m = attrs[.modificationDate] as? Date,
@@ -851,10 +940,204 @@ final class StatusController: NSObject, NSMenuDelegate {
            lastTurnStart > 0, Date().timeIntervalSince1970 - lastTurnStart >= 60 {
             completionSound?.play()
         }
+        // Per-agent done transition drives the completion popup (fires on every finish,
+        // unlike the sound which gates on a 1-minute turn).
+        let claudeJustDone = didObserveCompletionStates && claudeEff.state == "done" && prevClaudeState != "done"
+        let codexJustDone = didObserveCompletionStates && codexEff.state == "done" && prevCodexState != "done"
+        prevClaudeState = claudeEff.state
+        prevCodexState = codexEff.state
+        didObserveCompletionStates = true
+
         if !claudeEff.isAnimating && !codexEff.isAnimating { lastTurnStart = 0 }
         prevEff = combinedEff
 
         renderAgents()
+
+        if showCompletionPopup {
+            if claudeJustDone { showCompletionPopover(for: claudeEff) }
+            else if codexJustDone { showCompletionPopover(for: codexEff) }
+        }
+    }
+
+    // MARK: completion popup
+
+    // A transient toast that drops straight down from the status bar icon when a turn
+    // finishes. Always anchored to claudeStatusItem — it's the one item that stays
+    // visible at rest (the Codex item is zero-width/hidden when not animating).
+    func showCompletionPopover(for status: AgentStatus) {
+        completionPopoverTimer?.invalidate()
+        completionPopoverPositionTimer?.invalidate()
+        dismissCompletionPopover(animated: false)
+        completionPopoverStatus = status
+        claudeStatusItem.menu?.cancelTracking()
+        codexStatusItem.menu?.cancelTracking()
+
+        // Defer the anchor to the next runloop turn. renderAgents() just changed the
+        // icon/label/width for the end of this turn; reading button.bounds before that
+        // relayout settles would point the popover's arrow at the icon's old position.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let button = self.claudeStatusItem.button, button.window != nil else { return }
+            let size = NSSize(width: 272, height: 68)
+            let panel = NSPanel(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.level = .statusBar
+            panel.hasShadow = true
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+            panel.contentViewController = self.completionPopoverContent(for: status)
+            panel.alphaValue = 1
+            self.completionWindow = panel
+            self.repositionCompletionPopover()
+            panel.orderFrontRegardless()
+
+            let t = Timer(timeInterval: 10.0, repeats: false) { [weak self] _ in
+                self?.dismissCompletionPopover(animated: true)
+            }
+            RunLoop.main.add(t, forMode: .common)
+            self.completionPopoverTimer = t
+
+            let positionTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.repositionCompletionPopover()
+            }
+            RunLoop.main.add(positionTimer, forMode: .common)
+            self.completionPopoverPositionTimer = positionTimer
+        }
+    }
+
+    func repositionCompletionPopover() {
+        guard let button = claudeStatusItem.button,
+              let buttonWindow = button.window,
+              let toastWindow = completionWindow else { return }
+
+        let buttonRectInWindow = button.convert(button.bounds, to: nil)
+        let anchor = buttonWindow.convertToScreen(buttonRectInWindow)
+        var frame = toastWindow.frame
+        frame.origin.x = anchor.midX - frame.width / 2
+        frame.origin.y = anchor.minY - frame.height - 8
+
+        if let screenFrame = buttonWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            frame.origin.x = min(max(frame.origin.x, screenFrame.minX + 6), screenFrame.maxX - frame.width - 6)
+            frame.origin.y = min(max(frame.origin.y, screenFrame.minY + 6), screenFrame.maxY - frame.height - 6)
+        }
+        toastWindow.setFrame(frame, display: true)
+    }
+
+    func dismissCompletionPopover(animated: Bool, completion: (() -> Void)? = nil) {
+        completionPopoverTimer?.invalidate()
+        completionPopoverTimer = nil
+        completionPopoverPositionTimer?.invalidate()
+        completionPopoverPositionTimer = nil
+
+        guard let toastWindow = completionWindow else {
+            completionPopoverStatus = nil
+            completion?()
+            return
+        }
+
+        let finish = { [weak self, weak toastWindow] in
+            toastWindow?.close()
+            if self?.completionWindow === toastWindow {
+                self?.completionWindow = nil
+                self?.completionPopoverStatus = nil
+            }
+            completion?()
+        }
+
+        guard animated else {
+            finish()
+            return
+        }
+
+        var targetFrame = toastWindow.frame
+        targetFrame = targetFrame.insetBy(dx: 8, dy: 3)
+        targetFrame.origin.y += 8
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            toastWindow.animator().alphaValue = 0
+            toastWindow.animator().setFrame(targetFrame, display: true)
+        } completionHandler: {
+            finish()
+        }
+    }
+
+    func completionPopoverContent(for status: AgentStatus) -> NSViewController {
+        let width: CGFloat = 272, height: CGFloat = 68
+        let content = SessionRowView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        content.autoresizingMask = [.width, .height]
+        content.target = self
+        content.action = #selector(openCompletionPopoverConversation(_:))
+        content.layer?.backgroundColor = NSColor.clear.cgColor
+        content.layer?.cornerRadius = 18
+        content.layer?.masksToBounds = true
+        if #available(macOS 10.15, *) {
+            content.layer?.cornerCurve = .continuous
+        }
+
+        let iconView = NSImageView(frame: NSRect(x: 17, y: (height - 28) / 2, width: 28, height: 28))
+        if #available(macOS 11.0, *),
+           let img = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Task complete") {
+            img.isTemplate = true
+            iconView.image = img
+            iconView.contentTintColor = NSColor.systemGreen
+        }
+        content.addSubview(iconView)
+
+        content.addSubview(menuLabel("Task complete", x: 56, y: height - 36, width: width - 74, height: 18, bold: true, size: 13, color: .labelColor))
+        let detail = status.title.isEmpty ? status.source : "\(status.source): \(status.title)"
+        content.addSubview(menuLabel(detail, x: 56, y: 14, width: width - 74, height: 16, size: 11, color: .secondaryLabelColor))
+
+        let vc = NSViewController()
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+            glass.cornerRadius = 18
+            glass.tintColor = brand.withAlphaComponent(0.08)
+            glass.style = .regular
+            glass.contentView = content
+            vc.view = glass
+        } else {
+            let root = SessionRowView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+            root.target = self
+            root.action = #selector(openCompletionPopoverConversation(_:))
+            root.layer?.backgroundColor = NSColor.clear.cgColor
+            root.layer?.cornerRadius = 18
+            root.layer?.masksToBounds = true
+            if #available(macOS 10.15, *) {
+                root.layer?.cornerCurve = .continuous
+            }
+
+            let blur = PassthroughVisualEffectView(frame: root.bounds)
+            blur.autoresizingMask = [.width, .height]
+            blur.blendingMode = .behindWindow
+            blur.material = .popover
+            blur.state = .active
+            blur.wantsLayer = true
+            blur.layer?.cornerRadius = 18
+            blur.layer?.masksToBounds = true
+            if #available(macOS 10.15, *) {
+                blur.layer?.cornerCurve = .continuous
+            }
+            root.addSubview(blur)
+            root.addSubview(content)
+            vc.view = root
+        }
+        return vc
+    }
+
+    @objc func openCompletionPopoverConversation(_ sender: AnyObject) {
+        guard let status = completionPopoverStatus else { return }
+        dismissCompletionPopover(animated: true) { [weak self] in
+            self?.openConversation(status)
+        }
     }
 
     func effectiveStatus(from current: [String: Any], source: String) -> AgentStatus {
@@ -868,6 +1151,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         var started = (current["startedAt"] as? NSNumber)?.doubleValue ?? 0
         let transcript = current["transcript"] as? String ?? ""
         let client = current["client"] as? String ?? ""
+        let terminalApp = current["terminalApp"] as? String ?? ""
+        let terminalBundleId = current["terminalBundleId"] as? String ?? ""
+        let tty = current["tty"] as? String ?? ""
         let age = Date().timeIntervalSince1970 - ts
 
         var state = rawState
@@ -893,7 +1179,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if title.isEmpty, source == "Claude" {
             title = titleFromClaudeTranscript(transcript)
         }
-        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, transcript: transcript, client: client)
+        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, transcript: transcript, client: client, terminalApp: terminalApp, terminalBundleId: terminalBundleId, tty: tty)
     }
 
     func readSessionStatuses(in dir: String, source: String) -> [AgentStatus] {
@@ -1029,7 +1315,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                       aggregateStatus(for: "Codex", sessions: codexSessionStatuses, fallback: codexEff)]
             .filter(\.isActive)
         let animate = active.contains { $0.isAnimating }
-        activeBase = active.map { statusBarLabel(for: $0) }.joined(separator: "  ")
+        activeBase = combinedStatusBarLabel(active)
         startedAt = active.compactMap { $0.startedAt > 0 ? $0.startedAt : nil }.min() ?? 0
         activeColor = iconColor
 
@@ -1047,39 +1333,28 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func renderStatusItems(_ active: [AgentStatus]) {
+        setStatusItem(codexStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: true)
+
         if active.isEmpty {
-            setStatusItem(claudeStatusItem, icon: appIcon(for: "Claude"), label: "", startedAt: 0, hidden: false)
-            setStatusItem(codexStatusItem, icon: appIcon(for: "Codex"), label: "", startedAt: 0, hidden: true)
+            setStatusItem(claudeStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: false)
             return
         }
 
-        let activeBySource = Dictionary(uniqueKeysWithValues: active.map { ($0.source, $0) })
-        for source in ["Claude", "Codex"] {
-            guard let item = statusItem(for: source) else { continue }
-            guard let status = activeBySource[source] else {
-                // Claude is the always-visible anchor: when it has no active session it
-                // falls back to its idle icon instead of vanishing. Without this, Claude's
-                // item disappears whenever Codex is the only active agent. Codex still hides
-                // when idle so the bar stays uncluttered.
-                let isAnchor = (source == "Claude")
-                setStatusItem(item, icon: appIcon(for: source), label: "", startedAt: 0, hidden: !isAnchor)
-                continue
-            }
-            setStatusItem(
-                item,
-                icon: statusBarIcon(for: status),
-                label: statusBarLabel(for: status),
-                startedAt: status.startedAt,
-                hidden: false,
-                textColor: status.state == "permission" ? amber : NSColor.labelColor,
-                // Only an executing session (thinking/tool) flips; permission/waiting stay still.
-                flipIcon: status.isAnimating
-            )
+        if active.count > 1 {
+            setCombinedStatusItem(claudeStatusItem, statuses: active)
+            return
         }
-    }
 
-    func statusItem(for source: String) -> NSStatusItem? {
-        source == "Codex" ? codexStatusItem : claudeStatusItem
+        let status = active[0]
+        setStatusItem(
+            claudeStatusItem,
+            icon: statusBarIcon(for: status),
+            label: statusBarLabel(for: status),
+            startedAt: status.startedAt,
+            hidden: false,
+            textColor: status.state == "permission" ? amber : NSColor.labelColor,
+            flipIcon: status.isAnimating
+        )
     }
 
     func statusBarLabel(for status: AgentStatus) -> String {
@@ -1091,6 +1366,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         case "waiting": return status.label.isEmpty ? "Waiting" : status.label
         default: return ""
         }
+    }
+
+    func combinedStatusBarLabel(_ active: [AgentStatus]) -> String {
+        guard active.count > 1 else { return active.first.map { statusBarLabel(for: $0) } ?? "" }
+        let labels = active.map { statusBarLabel(for: $0) }
+        return labels.allSatisfy { $0 == labels.first } ? (labels.first ?? "") : labels.joined(separator: "  ")
     }
 
     func aggregateStatus(for source: String, sessions: [AgentStatus], fallback: AgentStatus) -> AgentStatus {
@@ -1114,10 +1395,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         return top
     }
 
-    func combinedIcon(frame: Int) -> NSImage {
-        let active = [aggregateStatus(for: "Claude", sessions: claudeSessionStatuses, fallback: claudeEff),
-                      aggregateStatus(for: "Codex", sessions: codexSessionStatuses, fallback: codexEff)]
-            .filter(\.isActive)
+    func combinedIcon(frame: Int, active: [AgentStatus]) -> NSImage {
         if active.isEmpty { return appIcon(for: "Claude") }
         if active.count == 1 {
             return agentIcon(active[0], frame: frame)
@@ -1146,7 +1424,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         appIcon(for: status.source)
     }
 
-    // MARK: self-quit lifecycle (rationale + warmup-churn history in CLAUDE.md)
+    // MARK: lifecycle
 
     func claudeDesktopRunning() -> Bool {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == claudeDesktopBundleID }
@@ -1158,22 +1436,6 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func codexSessionCount() -> Int {
         (try? FileManager.default.contentsOfDirectory(atPath: codexSessionsDir).count) ?? 0
-    }
-
-    // Stay while Claude desktop is open OR a session is active; otherwise quit after a
-    // short debounced grace (warmup-session churn must not kill us).
-    func checkLifecycle() {
-        let now = Date()
-        if now.timeIntervalSince(launchedAt) < launchGrace { return }
-        if claudeDesktopRunning() || sessionCount() > 0 || codexSessionCount() > 0 {
-            notNeededSince = nil
-            return
-        }
-        if let since = notNeededSince {
-            if now.timeIntervalSince(since) >= idleQuitDelay { NSApp.terminate(nil) }
-        } else {
-            notNeededSince = now
-        }
     }
 
     // Read the last non-empty line of a (possibly large) file by tailing ~8KB.
@@ -1219,23 +1481,51 @@ final class StatusController: NSObject, NSMenuDelegate {
         renderStatusItems(active)
     }
 
-    // While a session is executing, the icon does a 3D flip around its own vertical
-    // center axis (rotateY) every 3s, lasting 0.8s. One self-repeating CAKeyframeAnimation
-    // carries the whole 3s cadence — the flip fills the first 0.8s, the rest holds flat.
-    // CoreAnimation runs on the render server, so it keeps flipping even while the menu
+    // While a session is executing, the icon loops through three motions: a vertical
+    // 3D flip, a flat in-place spin, then a horizontal 3D flip.
+    // CoreAnimation runs on the render server, so it keeps moving even while the menu
     // owns the run loop, and survives the frequent button.image updates.
     func iconFlipAnimation() -> CAKeyframeAnimation {
         let anim = CAKeyframeAnimation(keyPath: "transform")
         var perspective = CATransform3DIdentity
         perspective.m34 = -1.0 / 480.0 // adds depth so the flip reads as 3D, not a flat squish
-        func rotY(_ deg: CGFloat) -> NSValue {
-            NSValue(caTransform3D: CATransform3DRotate(perspective, deg * .pi / 180, 0, 1, 0))
+        func rot(_ deg: CGFloat, x: CGFloat, y: CGFloat, z: CGFloat) -> NSValue {
+            NSValue(caTransform3D: CATransform3DRotate(perspective, deg * .pi / 180, x, y, z))
         }
-        anim.values = [rotY(0), rotY(90), rotY(180), rotY(270), rotY(360), rotY(360)]
-        let flipEnd = 0.8 / 3.0 // the flip occupies the first 0.8s of the 3s loop
-        anim.keyTimes = [0, flipEnd * 0.25, flipEnd * 0.5, flipEnd * 0.75, flipEnd, 1.0]
-            .map { NSNumber(value: Double($0)) }
-        anim.duration = 3.0
+
+        let step = 0.8
+        let pause = 2.0
+        let total = (step * 3) + (pause * 3)
+        func t(_ seconds: CGFloat) -> NSNumber {
+            NSNumber(value: Double(seconds / total))
+        }
+        func addCycle(start: CGFloat, axis: (x: CGFloat, y: CGFloat, z: CGFloat), values: inout [NSValue], keyTimes: inout [NSNumber]) {
+            values += [
+                rot(0, x: axis.x, y: axis.y, z: axis.z),
+                rot(90, x: axis.x, y: axis.y, z: axis.z),
+                rot(180, x: axis.x, y: axis.y, z: axis.z),
+                rot(270, x: axis.x, y: axis.y, z: axis.z),
+                rot(360, x: axis.x, y: axis.y, z: axis.z),
+                rot(360, x: axis.x, y: axis.y, z: axis.z),
+            ]
+            keyTimes += [
+                t(start),
+                t(start + step * 0.25),
+                t(start + step * 0.5),
+                t(start + step * 0.75),
+                t(start + step),
+                t(start + step + pause),
+            ]
+        }
+
+        var values: [NSValue] = []
+        var keyTimes: [NSNumber] = []
+        addCycle(start: 0, axis: (0, 1, 0), values: &values, keyTimes: &keyTimes)
+        addCycle(start: step + pause, axis: (0, 0, 1), values: &values, keyTimes: &keyTimes)
+        addCycle(start: (step + pause) * 2, axis: (1, 0, 0), values: &values, keyTimes: &keyTimes)
+        anim.values = values
+        anim.keyTimes = keyTimes
+        anim.duration = CFTimeInterval(total)
         anim.repeatCount = .infinity
         anim.calculationMode = .linear
         anim.isRemovedOnCompletion = false
@@ -1248,7 +1538,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func updateIconLayer(_ button: NSStatusBarButton, icon: NSImage, imageWidth: CGFloat) {
         button.wantsLayer = true
         guard let host = button.layer else { return }
-        let iconSize: CGFloat = 18
+        let iconSize = NSSize(width: max(icon.size.width, 18), height: 18)
         let layer = host.sublayers?.first { $0.name == "iconFlip" } ?? {
             let l = CALayer(); l.name = "iconFlip"; host.addSublayer(l); return l
         }()
@@ -1258,8 +1548,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         // The cell centers the image, so its left edge sits at (buttonWidth - imageWidth)/2;
         // the icon occupies the image's leftmost 18pt. Mirror that so the layer lines up.
         let pad = max(0, (button.bounds.width - imageWidth) / 2)
-        let y = max(0, (button.bounds.height - iconSize) / 2)
-        layer.frame = CGRect(x: pad, y: y, width: iconSize, height: iconSize)
+        let y = max(0, (button.bounds.height - iconSize.height) / 2)
+        layer.frame = CGRect(x: pad, y: y, width: iconSize.width, height: iconSize.height)
         if layer.animation(forKey: "flip") == nil {
             layer.add(iconFlipAnimation(), forKey: "flip")
         }
@@ -1312,6 +1602,25 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    func setCombinedStatusItem(_ item: NSStatusItem, statuses: [AgentStatus]) {
+        guard let button = item.button else { return }
+        let image = statusBarSegmentsImage(statuses.map {
+            (
+                icon: statusBarIcon(for: $0),
+                text: statusBarDisplayText(label: statusBarLabel(for: $0), startedAt: $0.startedAt),
+                textColor: $0.state == "permission" ? amber : NSColor.labelColor
+            )
+        })
+        item.length = image.size.width + 8
+        button.isHidden = false
+        button.contentTintColor = nil
+        button.image = image
+        button.imagePosition = .imageOnly
+        button.attributedTitle = NSAttributedString(string: "")
+        button.title = ""
+        removeIconLayer(button)
+    }
+
     func statusBarDisplayText(label: String, startedAt: Double) -> String {
         var text = label
         if showTimer, startedAt > 0 {
@@ -1325,7 +1634,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     // icon == nil reserves the icon's width but leaves it blank — used while the icon is
     // flipping in its own sublayer, so the text stays in exactly the same place.
     func statusBarItemImage(icon: NSImage?, text: String, textColor: NSColor = .labelColor) -> NSImage {
-        let iconSize: CGFloat = 18
+        let iconWidth = max(icon?.size.width ?? 18, 18)
+        let iconHeight: CGFloat = 18
         let height: CGFloat = 18
         let gap: CGFloat = text.isEmpty ? 0 : 5
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -1334,12 +1644,50 @@ final class StatusController: NSObject, NSMenuDelegate {
             .font: font,
         ]
         let textSize = text.isEmpty ? .zero : NSAttributedString(string: text, attributes: attrs).size()
-        let width = ceil(iconSize + gap + textSize.width)
+        let width = ceil(iconWidth + gap + textSize.width)
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
-            icon?.draw(in: NSRect(x: 0, y: 0, width: iconSize, height: iconSize), from: .zero, operation: .sourceOver, fraction: 1)
+            icon?.draw(in: NSRect(x: 0, y: 0, width: iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
             if !text.isEmpty {
                 let textY = floor((height - textSize.height) / 2)
-                text.draw(at: NSPoint(x: iconSize + gap, y: textY), withAttributes: attrs)
+                text.draw(at: NSPoint(x: iconWidth + gap, y: textY), withAttributes: attrs)
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    func statusBarSegmentsImage(_ segments: [(icon: NSImage, text: String, textColor: NSColor)]) -> NSImage {
+        let iconHeight: CGFloat = 18
+        let height: CGFloat = 18
+        let iconTextGap: CGFloat = 5
+        let segmentGap: CGFloat = 12
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let measured = segments.map { segment in
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: segment.textColor,
+                .font: font,
+            ]
+            let textSize = segment.text.isEmpty ? .zero : NSAttributedString(string: segment.text, attributes: attrs).size()
+            return (segment: segment, attrs: attrs, textSize: textSize, iconWidth: max(segment.icon.size.width, 18))
+        }
+        let width = ceil(measured.enumerated().reduce(CGFloat(0)) { acc, item in
+            let gap = item.offset == 0 ? CGFloat(0) : segmentGap
+            let textGap = item.element.segment.text.isEmpty ? CGFloat(0) : iconTextGap
+            return acc + gap + item.element.iconWidth + textGap + item.element.textSize.width
+        })
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
+            var x: CGFloat = 0
+            for (idx, item) in measured.enumerated() {
+                if idx > 0 { x += segmentGap }
+                item.segment.icon.draw(in: NSRect(x: x, y: 0, width: item.iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
+                x += item.iconWidth
+                if !item.segment.text.isEmpty {
+                    x += iconTextGap
+                    let textY = floor((height - item.textSize.height) / 2)
+                    item.segment.text.draw(at: NSPoint(x: x, y: textY), withAttributes: item.attrs)
+                    x += item.textSize.width
+                }
             }
             return true
         }
@@ -1462,6 +1810,46 @@ final class StatusController: NSObject, NSMenuDelegate {
             return codexApplicationIcon ?? codeIcon(color: iconColor, glyph: 0, scale: 0.92)
         }
         return claudeApplicationIcon ?? restingIcon(color: iconColor)
+    }
+
+    // A single-color menu-bar version of the vibego app icon: a white status bead with the
+    // app icon's V simplified as a negative-space cutout.
+    func vibeGoStatusBarIcon(showsDot: Bool = false) -> NSImage {
+        let s: CGFloat = 18
+        let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
+            NSColor.white.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 1.17, y: 1.17, width: 15.66, height: 15.66)).fill()
+
+            let v = NSBezierPath()
+            v.lineWidth = 3.00
+            v.lineCapStyle = .round
+            v.lineJoinStyle = .round
+            v.move(to: NSPoint(x: 4.46, y: 11.09))
+            v.curve(
+                to: NSPoint(x: 8.68, y: 5.51),
+                controlPoint1: NSPoint(x: 5.81, y: 9.74),
+                controlPoint2: NSPoint(x: 6.73, y: 6.0)
+            )
+            v.curve(
+                to: NSPoint(x: 13.81, y: 11.68),
+                controlPoint1: NSPoint(x: 10.62, y: 5.08),
+                controlPoint2: NSPoint(x: 11.43, y: 10.2)
+            )
+            if let cg = NSGraphicsContext.current?.cgContext {
+                cg.saveGState()
+                cg.setBlendMode(.clear)
+                v.stroke()
+                cg.restoreGState()
+            }
+
+            if showsDot {
+                NSColor.white.setFill()
+                NSBezierPath(ovalIn: NSRect(x: 12.2, y: 2.0, width: 3.2, height: 3.2)).fill()
+            }
+            return true
+        }
+        img.isTemplate = false
+        return img
     }
 
     // Full color (isTemplate=false), so the Orange/System color setting does NOT apply here.

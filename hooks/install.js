@@ -22,24 +22,6 @@ const settingsPath = path.join(home, ".claude", "settings.json");
 const codexSettingsPath = path.join(home, ".codex", "hooks.json");
 const node = process.execPath;
 
-// Best-effort cleanup after the app was renamed to VibeGo.
-for (const oldApp of ["/Applications/ClaudeStatusBar.app"]) {
-  try {
-    if (fs.existsSync(oldApp)) {
-      fs.rmSync(oldApp, { recursive: true, force: true });
-      console.log("Removed old app:", oldApp);
-    }
-  } catch (e) {
-    console.log("Could not remove old app:", oldApp, String(e.message || e));
-  }
-}
-
-// Retire the old 0.0.2 background watcher LaunchAgent on upgrade (0.0.3+ self-quits).
-const OLD_AGENT_LABEL = "com.local.claudestatusbar.watcher";
-const oldAgentPlist = path.join(home, "Library", "LaunchAgents", OLD_AGENT_LABEL + ".plist");
-try { cp.execSync(`launchctl bootout gui/${process.getuid()}/${OLD_AGENT_LABEL}`, { stdio: "ignore" }); } catch {}
-if (fs.existsSync(oldAgentPlist)) { fs.rmSync(oldAgentPlist); console.log("Removed old desktop watcher LaunchAgent."); }
-
 fs.mkdirSync(sbDir, { recursive: true });
 fs.rmSync(path.join(sbDir, "watcher.sh"), { force: true });
 fs.copyFileSync(path.join(__dirname, "update.js"), updateDest);
@@ -92,7 +74,7 @@ addMatched("PostToolUse", cmd("post"));
 addUnmatched("Notification", cmd("notify"));
 addMatched("PermissionRequest", cmd("permreq"));
 addUnmatched("Stop", cmd("stop"));
-// Lifecycle hooks (launch the app on open; the app quits itself when no longer needed)
+// Lifecycle hooks (launch the app on open; the app stays resident until the user quits it)
 addUnmatched("SessionStart", life("start"));
 addUnmatched("SessionEnd", life("end"));
 

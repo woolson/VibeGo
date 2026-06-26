@@ -15,16 +15,11 @@ const codexSettingsPath = path.join(home, ".codex", "hooks.json");
 const statuslineOriginalPath = path.join(MARKER, "statusline-original.json");
 
 // Tear down the desktop watcher LaunchAgent (best-effort; safe if absent).
-const AGENT_LABEL = "com.local.claudestatusbar.watcher";
 const NEW_AGENT_LABEL = "com.local.vibego.watcher";
-const agentPlist = path.join(home, "Library", "LaunchAgents", AGENT_LABEL + ".plist");
 const newAgentPlist = path.join(home, "Library", "LaunchAgents", NEW_AGENT_LABEL + ".plist");
-try { cp.execSync(`launchctl bootout gui/${process.getuid()}/${AGENT_LABEL}`, { stdio: "ignore" }); } catch {}
 try { cp.execSync(`launchctl bootout gui/${process.getuid()}/${NEW_AGENT_LABEL}`, { stdio: "ignore" }); } catch {}
-if (fs.existsSync(agentPlist)) { fs.rmSync(agentPlist); console.log("Removed desktop watcher LaunchAgent."); }
-if (fs.existsSync(newAgentPlist)) { fs.rmSync(newAgentPlist); console.log("Removed VibeGo watcher LaunchAgent."); }
-try { cp.execSync("pkill -x VibeGo", { stdio: "ignore" }); } catch {}
-try { cp.execSync("pkill -x ClaudeStatusBar", { stdio: "ignore" }); } catch {}
+if (fs.existsSync(newAgentPlist)) { fs.rmSync(newAgentPlist); console.log("Removed vibego watcher LaunchAgent."); }
+try { cp.execSync("pkill -x vibego", { stdio: "ignore" }); } catch {}
 
 if (fs.existsSync(settingsPath)) {
   const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));

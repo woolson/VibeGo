@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Claude Status Bar are documented here. This project follows
+All notable changes to vibego are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
 ## [0.2.2] - 2026-06-25
@@ -73,12 +73,12 @@ All notable changes to Claude Status Bar are documented here. This project follo
 - Signed and notarized DMG so it opens without a Gatekeeper warning.
 - Claude Code plugin marketplace manifest for the plugin install path.
 
-[0.2.2]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.2.2
-[0.2.1]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.2.1
-[0.2.0]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.2.0
-[0.1.0]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.1.0
-[0.0.5]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.5
-[0.0.4]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.4
-[0.0.3]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.3
-[0.0.2]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.2
-[0.0.1]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.1
+[0.2.2]: https://github.com/woolson/VibeGo/releases/tag/v0.2.2
+[0.2.1]: https://github.com/woolson/VibeGo/releases/tag/v0.2.1
+[0.2.0]: https://github.com/woolson/VibeGo/releases/tag/v0.2.0
+[0.1.0]: https://github.com/woolson/VibeGo/releases/tag/v0.1.0
+[0.0.5]: https://github.com/woolson/VibeGo/releases/tag/v0.0.5
+[0.0.4]: https://github.com/woolson/VibeGo/releases/tag/v0.0.4
+[0.0.3]: https://github.com/woolson/VibeGo/releases/tag/v0.0.3
+[0.0.2]: https://github.com/woolson/VibeGo/releases/tag/v0.0.2
+[0.0.1]: https://github.com/woolson/VibeGo/releases/tag/v0.0.1

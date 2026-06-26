@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SessionStart/SessionEnd: launch the app, and track sessions as one file per session id
-// in sessions.d/ (race-free; the app quits itself). Rationale + history in CLAUDE.md.
+// in sessions.d/ (race-free). Rationale + history in CLAUDE.md.
 // Usage: node lifecycle.js <start|end>   (hook JSON, incl. session_id, arrives on stdin)
 
 const fs = require("fs");
@@ -9,8 +9,8 @@ const path = require("path");
 const cp = require("child_process");
 
 const BUNDLE_ID = "com.local.vibego";
-const OLD_BUNDLE_ID = "com.local.claudestatusbar";
-const EXEC = "VibeGo";
+const EXEC = "vibego";
+const quitSuppressPath = path.join(os.homedir(), ".vibego", "quit-suppressed");
 const dir = path.join(os.homedir(), ".claude", "statusbar");
 const sessDir = path.join(dir, "sessions.d");
 const stateDir = path.join(dir, "states.d");
@@ -65,9 +65,7 @@ function run() {
 }
 
 function launchApp() {
+  if (fs.existsSync(quitSuppressPath)) return;
   const child = cp.spawn("open", ["-g", "-b", BUNDLE_ID], { stdio: "ignore", detached: true });
-  child.on("error", () => {
-    cp.spawn("open", ["-g", "-b", OLD_BUNDLE_ID], { stdio: "ignore", detached: true }).unref();
-  });
   child.unref();
 }

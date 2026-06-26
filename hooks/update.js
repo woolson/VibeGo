@@ -26,13 +26,69 @@ function detectClient(p) {
   if (explicit.includes("cli") || explicit.includes("terminal")) return "cli";
 
   const chain = processChain();
-  if (chain.some((s) => s.includes(".app/contents/") || s.includes("claude helper") || s.includes("claude.app"))) {
-    return "app";
-  }
   if (process.env.TERM_PROGRAM || process.env.TERM_SESSION_ID || process.env.SSH_TTY ||
       chain.some((s) => /(^|\/)(terminal|iterm2?|ghostty|wezterm|alacritty|kitty|warp)(\.app)?(\s|\/|$)/.test(s))) {
     return "cli";
   }
+  if (chain.some((s) => s.includes("claude helper") || s.includes("claude.app"))) {
+    return "app";
+  }
+  return "";
+}
+
+function terminalMetadata() {
+  const termProgram = String(process.env.TERM_PROGRAM || "");
+  const tty = currentTTY();
+  const lowerTerm = termProgram.toLowerCase();
+  let terminalApp = termProgram;
+  let terminalBundleId = "";
+
+  if (lowerTerm === "apple_terminal") {
+    terminalApp = "Terminal";
+    terminalBundleId = "com.apple.Terminal";
+  } else if (lowerTerm.includes("iterm")) {
+    terminalApp = "iTerm";
+    terminalBundleId = "com.googlecode.iterm2";
+  } else if (lowerTerm.includes("warp")) {
+    terminalApp = "Warp";
+    terminalBundleId = "dev.warp.Warp-Stable";
+  } else if (lowerTerm.includes("wezterm")) {
+    terminalApp = "WezTerm";
+    terminalBundleId = "com.github.wez.wezterm";
+  } else if (lowerTerm.includes("ghostty")) {
+    terminalApp = "Ghostty";
+    terminalBundleId = "com.mitchellh.ghostty";
+  } else if (lowerTerm.includes("kitty")) {
+    terminalApp = "kitty";
+    terminalBundleId = "net.kovidgoyal.kitty";
+  } else if (lowerTerm.includes("alacritty")) {
+    terminalApp = "Alacritty";
+    terminalBundleId = "org.alacritty";
+  }
+
+  if (!terminalBundleId) {
+    const chain = processChain();
+    const joined = chain.join("\n");
+    if (joined.includes("terminal.app")) { terminalApp = "Terminal"; terminalBundleId = "com.apple.Terminal"; }
+    else if (joined.includes("iterm")) { terminalApp = "iTerm"; terminalBundleId = "com.googlecode.iterm2"; }
+    else if (joined.includes("warp.app")) { terminalApp = "Warp"; terminalBundleId = "dev.warp.Warp-Stable"; }
+    else if (joined.includes("wezterm")) { terminalApp = "WezTerm"; terminalBundleId = "com.github.wez.wezterm"; }
+    else if (joined.includes("ghostty")) { terminalApp = "Ghostty"; terminalBundleId = "com.mitchellh.ghostty"; }
+    else if (joined.includes("kitty.app")) { terminalApp = "kitty"; terminalBundleId = "net.kovidgoyal.kitty"; }
+    else if (joined.includes("alacritty")) { terminalApp = "Alacritty"; terminalBundleId = "org.alacritty"; }
+  }
+
+  return { terminalApp, terminalBundleId, tty };
+}
+
+function currentTTY() {
+  if (process.env.TTY) return String(process.env.TTY);
+  try {
+    const tty = require("child_process")
+      .execFileSync("ps", ["-p", String(process.pid), "-o", "tty="], { encoding: "utf8", timeout: 300 })
+      .trim();
+    if (tty && tty !== "??") return tty.startsWith("/") ? tty : `/dev/${tty}`;
+  } catch {}
   return "";
 }
 
@@ -125,7 +181,22 @@ process.stdin.on("end", () => {
       return;
   }
 
-  const out = { state, label, tool: p.tool_name || "", project, sessionId: p.session_id || "", transcript: p.transcript_path || prev.transcript || "", client: detectClient(p) || prev.client || "", startedAt, ts };
+  const client = detectClient(p) || prev.client || "";
+  const terminal = client === "cli" ? terminalMetadata() : {};
+  const out = {
+    state,
+    label,
+    tool: p.tool_name || "",
+    project,
+    sessionId: p.session_id || "",
+    transcript: p.transcript_path || prev.transcript || "",
+    client,
+    terminalApp: terminal.terminalApp || prev.terminalApp || "",
+    terminalBundleId: terminal.terminalBundleId || prev.terminalBundleId || "",
+    tty: terminal.tty || prev.tty || "",
+    startedAt,
+    ts,
+  };
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.mkdirSync(stateDir, { recursive: true });
