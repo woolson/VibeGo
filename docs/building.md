@@ -3,8 +3,8 @@
 ```bash
 git clone https://github.com/m1ckc3s/claude-status-bar
 cd claude-status-bar
-./build.sh            # builds build/ClaudeStatusBar.app
-./build.sh --dmg      # also produces build/ClaudeStatusBar.dmg
+./build.sh            # builds build/VibeGo.app
+./build.sh --dmg      # also produces build/VibeGo.dmg
 ```
 Requires the Xcode Command Line Tools (`xcode-select --install`).
 

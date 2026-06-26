@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds ClaudeStatusBar.app (and optionally a .dmg with: ./build.sh --dmg).
+# Builds VibeGo.app (and optionally a .dmg with: ./build.sh --dmg).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP="build/ClaudeStatusBar.app"
-BIN="$APP/Contents/MacOS/ClaudeStatusBar"
+APP="build/VibeGo.app"
+BIN="$APP/Contents/MacOS/VibeGo"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -19,10 +19,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>ClaudeStatusBar</string>
-  <key>CFBundleDisplayName</key><string>Claude Status Bar</string>
-  <key>CFBundleIdentifier</key><string>com.local.claudestatusbar</string>
-  <key>CFBundleExecutable</key><string>ClaudeStatusBar</string>
+  <key>CFBundleName</key><string>VibeGo</string>
+  <key>CFBundleDisplayName</key><string>VibeGo</string>
+  <key>CFBundleIdentifier</key><string>com.local.vibego</string>
+  <key>CFBundleExecutable</key><string>VibeGo</string>
   <key>CFBundleVersion</key><string>0.2.2</string>
   <key>CFBundleShortVersionString</key><string>0.2.2</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -35,7 +35,7 @@ PLIST
 
 # Bundle the hook scripts (so first-launch self-install works) and the app icon.
 mkdir -p "$APP/Contents/Resources"
-cp hooks/update.js hooks/lifecycle.js hooks/install.js hooks/uninstall.js "$APP/Contents/Resources/"
+cp hooks/update.js hooks/lifecycle.js hooks/codex-update.js hooks/codex-lifecycle.js hooks/statusline-proxy.js hooks/install.js hooks/uninstall.js "$APP/Contents/Resources/"
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
 
@@ -51,7 +51,7 @@ TEAM_ID="W9JZ4932LA"
 NOTARY_PROFILE="${NOTARY_PROFILE:-claude-statusbar}"
 
 SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')"
+  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/' || true)"
 
 # Strip extended attributes (Finder info, quarantine, etc.) that bundled resources can
 # carry — codesign rejects them ("resource fork, Finder information, ... not allowed").
@@ -81,7 +81,7 @@ if [[ "${1:-}" == "--dmg" ]]; then
   fi
 
   echo "Packaging DMG…"
-  DMG="build/ClaudeStatusBar.dmg"
+  DMG="build/VibeGo.dmg"
   STAGE="build/dmg-stage"
   rm -rf "$STAGE" "$DMG" build/rw.dmg
   mkdir -p "$STAGE"
@@ -90,12 +90,12 @@ if [[ "${1:-}" == "--dmg" ]]; then
 
   # Lay out the window on a read-write image to capture its .DS_Store, then build the final
   # image from the folder (see below).
-  hdiutil create -volname "Claude Status Bar" -srcfolder "$STAGE" -ov -format UDRW build/rw.dmg >/dev/null
+  hdiutil create -volname "VibeGo" -srcfolder "$STAGE" -ov -format UDRW build/rw.dmg >/dev/null
   device="$(hdiutil attach -readwrite -noverify -noautoopen build/rw.dmg | grep -E '^/dev/' | head -1 | awk '{print $1}')"
   sleep 1
   osascript <<'OSA' || echo "(Finder layout skipped — DMG still has the app + Applications shortcut)"
 tell application "Finder"
-  tell disk "Claude Status Bar"
+  tell disk "VibeGo"
     open
     set current view of container window to icon view
     set toolbar visible of container window to false
@@ -105,7 +105,7 @@ tell application "Finder"
     set arrangement of vo to not arranged
     set icon size of vo to 100
     set text size of vo to 12
-    set position of item "ClaudeStatusBar.app" of container window to {130, 150}
+    set position of item "VibeGo.app" of container window to {130, 150}
     set position of item "Applications" of container window to {350, 150}
     update without registering applications
     delay 1
@@ -118,10 +118,10 @@ OSA
   # writable volume, so macOS's fseventsd never creates a hidden .fseventsd in the shipped DMG.
   # (Removing .fseventsd from a mounted volume does not stick: the removal is itself an event
   # fseventsd logs, which recreates the folder.)
-  cp "/Volumes/Claude Status Bar/.DS_Store" "$STAGE/.DS_Store" 2>/dev/null || true
+  cp "/Volumes/VibeGo/.DS_Store" "$STAGE/.DS_Store" 2>/dev/null || true
   hdiutil detach "$device" >/dev/null || true
   rm -f build/rw.dmg
-  hdiutil create -volname "Claude Status Bar" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "VibeGo" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   rm -rf "$STAGE"
 
   # Sign, then notarize + staple the DMG so the downloaded image opens with no Gatekeeper

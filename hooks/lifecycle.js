@@ -8,10 +8,12 @@ const os = require("os");
 const path = require("path");
 const cp = require("child_process");
 
-const BUNDLE_ID = "com.local.claudestatusbar";
-const EXEC = "ClaudeStatusBar";
+const BUNDLE_ID = "com.local.vibego";
+const OLD_BUNDLE_ID = "com.local.claudestatusbar";
+const EXEC = "VibeGo";
 const dir = path.join(os.homedir(), ".claude", "statusbar");
 const sessDir = path.join(dir, "sessions.d");
+const stateDir = path.join(dir, "states.d");
 const statePath = path.join(dir, "state.json");
 const event = process.argv[2];
 
@@ -53,10 +55,19 @@ function run() {
     if (!running()) { try { for (const f of fs.readdirSync(sessDir)) fs.rmSync(path.join(sessDir, f), { force: true }); } catch {} }
     try { fs.writeFileSync(path.join(sessDir, id), ""); } catch {}
     clearStaleState(id);
-    cp.spawn("open", ["-g", "-b", BUNDLE_ID], { stdio: "ignore", detached: true }).unref();
+    launchApp();
   } else if (event === "end") {
     try { fs.rmSync(path.join(sessDir, id), { force: true }); } catch {}
+    try { fs.rmSync(path.join(stateDir, id + ".json"), { force: true }); } catch {}
     clearStaleState(id);
   }
   process.exit(0);
+}
+
+function launchApp() {
+  const child = cp.spawn("open", ["-g", "-b", BUNDLE_ID], { stdio: "ignore", detached: true });
+  child.on("error", () => {
+    cp.spawn("open", ["-g", "-b", OLD_BUNDLE_ID], { stdio: "ignore", detached: true }).unref();
+  });
+  child.unref();
 }

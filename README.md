@@ -1,10 +1,10 @@
 <img width="672" height="80" alt="Screen Recording 2026-06-23 at 3 57 47 AM 2" src="https://github.com/user-attachments/assets/97876ac9-cd4f-431b-873a-93220de5bd99" />
 <br><br>
 
-<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="260"></a>
+<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/VibeGo.dmg"><img src="assets/download.png" alt="Download VibeGo.dmg for macOS" width="260"></a>
 <br>
 
-## Claude Status Bar
+## VibeGo
 
 A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude icon while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. Lightweight, no window, no dock icon, no usage dashboards.
 
@@ -27,6 +27,8 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 - **Running a tool** — a short label (`Editing`, `Reading`, `Running command`, `Using tool`, …).
 - **Awaiting permission** — a paused yellow dot, in both the CLI and the Desktop app.
 - **Idle / done** — rests on the Claude logo.
+- **Codex support** — installs Codex hooks too, tracks Codex turns from `~/.codex/statusbar/state.json`, and shows Codex when it is the most recently active agent.
+- **Codex limits** — a second menu-bar icon shows two vertical 5-block meters: the left column is the 5-hour window remaining, the right column is the 7-day window remaining. Click it for plan, context, reset, and update details.
 
 Everything is controlled from the menu:
 
@@ -48,6 +50,7 @@ Everything is controlled from the menu:
 | Cursor (Claude Code extension) | ✅ |
 | Claude Desktop — **Chat** tab | ❌ |
 | **Cowork** | ❌ |
+| Codex CLI / app hooks | ✅ |
 
 ## Requirements
 
@@ -61,8 +64,8 @@ Everything is controlled from the menu:
 
 Signed and notarized. Open it, drag the app to Applications, launch once.
 
-1. Download the latest `ClaudeStatusBar.dmg` from [Releases](../../releases).
-2. Open it and drag **Claude Status Bar** into Applications.
+1. Download the latest `VibeGo.dmg` from [Releases](../../releases).
+2. Open it and drag **VibeGo** into Applications.
 3. Launch it once. On first launch it wires up the Claude Code hooks for you automatically.
 4. Start a new Claude Code session, the icon appears whenever Claude Code is running.
 
@@ -80,18 +83,18 @@ Installs the hooks (status + open/close lifecycle) automatically from inside Cla
 /plugin install claude-status-bar@claude-status-bar
 ```
 
-The plugin installs the hooks but not the app itself, so drag **Claude Status Bar** into Applications once (from the DMG). The plugin launches it automatically on session start.
+The plugin installs the hooks but not the app itself, so drag **VibeGo** into Applications once (from the DMG). The plugin launches it automatically on session start.
 
 ## How it works
 
-The app is stateless. Claude Code hooks write the current status to `~/.claude/statusbar/state.json`; the app polls that file every 0.4s and renders the icon and label. `SessionStart` launches it; it self-quits once the Claude desktop app is closed and no Claude Code session is active (each active session is a file under `~/.claude/statusbar/sessions.d/`).
+The app is stateless. Claude Code hooks write the current status to `~/.claude/statusbar/state.json`; Codex hooks write to `~/.codex/statusbar/state.json`. The app polls both files every 0.4s and renders the most recently active agent's icon and label. Codex rate-limit data is read from the latest `token_count` event under `~/.codex/sessions/`, using the 300-minute primary window and 10080-minute secondary window.
 
 The installer merges its hooks into `~/.claude/settings.json` (backing it up first), and the app's only network call is a once-a-day GitHub release check ([details](docs/privacy.md)).
 
 ## Uninstall
 
 ```bash
-node "/Applications/ClaudeStatusBar.app/Contents/Resources/uninstall.js"   # removes only our hooks
+node "/Applications/VibeGo.app/Contents/Resources/uninstall.js"   # removes only our hooks
 ```
 Then drag the app to the Trash.
 
