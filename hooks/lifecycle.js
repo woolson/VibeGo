@@ -16,6 +16,8 @@ const sessDir = path.join(dir, "sessions.d");
 const stateDir = path.join(dir, "states.d");
 const statePath = path.join(dir, "state.json");
 const event = process.argv[2];
+const CLOSED_SESSION_TTL_SECONDS = 24 * 60 * 60;
+const CLOSED_SESSION_LIMIT = 10;
 
 fs.mkdirSync(sessDir, { recursive: true });
 
@@ -34,6 +36,60 @@ function clearStaleState(id) {
     const tmp = statePath + "." + process.pid + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(out));
     fs.renameSync(tmp, statePath);
+  } catch {}
+}
+
+function atomicWriteJson(file, value) {
+  const tmp = file + "." + process.pid + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(value));
+  fs.renameSync(tmp, file);
+}
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+}
+
+function markSessionClosed(id) {
+  const now = Math.floor(Date.now() / 1000);
+  const sessionPath = path.join(stateDir, id + ".json");
+  const sessionPrev = readJson(sessionPath);
+  const globalPrev = readJson(statePath);
+  const prev = sessionPrev || (globalPrev && safeId(globalPrev.sessionId) === id ? globalPrev : {});
+  const out = {
+    ...prev,
+    state: "closed",
+    label: "Closed",
+    sessionId: prev.sessionId || id,
+    startedAt: 0,
+    ts: now,
+    closedAt: now,
+  };
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+    atomicWriteJson(sessionPath, out);
+  } catch {}
+}
+
+function pruneClosedSessions() {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = [];
+    for (const file of fs.readdirSync(stateDir)) {
+      if (!file.endsWith(".json")) continue;
+      const fullPath = path.join(stateDir, file);
+      const obj = readJson(fullPath);
+      if (!obj || (obj.state !== "closed" && obj.state !== "done")) continue;
+      const ts = Number(obj.closedAt || obj.ts || 0);
+      if (ts && now - ts > CLOSED_SESSION_TTL_SECONDS) {
+        fs.rmSync(fullPath, { force: true });
+      } else {
+        rows.push({ path: fullPath, ts });
+      }
+    }
+    rows
+      .sort((a, b) => b.ts - a.ts)
+      .slice(CLOSED_SESSION_LIMIT)
+      .forEach((row) => fs.rmSync(row.path, { force: true }));
   } catch {}
 }
 
@@ -58,7 +114,8 @@ function run() {
     launchApp();
   } else if (event === "end") {
     try { fs.rmSync(path.join(sessDir, id), { force: true }); } catch {}
-    try { fs.rmSync(path.join(stateDir, id + ".json"), { force: true }); } catch {}
+    markSessionClosed(id);
+    pruneClosedSessions();
     clearStaleState(id);
   }
   process.exit(0);

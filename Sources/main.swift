@@ -5,6 +5,7 @@ final class SessionRowView: NSView {
     var action: Selector?
     var representedTag = 0
     private var tracking: NSTrackingArea?
+    private var pressedInside = false
     private var hovering = false {
         didSet { updateHover() }
     }
@@ -55,7 +56,14 @@ final class SessionRowView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard let action else { return }
+        pressedInside = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { pressedInside = false }
+        guard pressedInside,
+              bounds.contains(convert(event.locationInWindow, from: nil)),
+              let action else { return }
         NSApp.sendAction(action, to: target, from: self)
     }
 
@@ -175,9 +183,31 @@ final class StatusController: NSObject, NSMenuDelegate {
     )
 
     enum AnimStyle: String { case web, code, crab }
+    enum DynamicBackgroundStyle: String, CaseIterable {
+        case liquid
+        case breathing
+
+        var title: String {
+            switch self {
+            case .liquid: return "Liquid"
+            case .breathing: return "Breathing"
+            }
+        }
+
+        // Accepts the current "breathing" value and the legacy "pulse" value, so an upgrade
+        // doesn't silently reset a previously chosen Pulse background back to Liquid.
+        init?(persistedValue: String) {
+            switch persistedValue {
+            case "liquid": self = .liquid
+            case "breathing", "pulse": self = .breathing
+            default: return nil
+            }
+        }
+    }
     var animStyle: AnimStyle = .web
     var showTimer = false
     var showDynamicStatusBackground = true
+    var dynamicBackgroundStyle: DynamicBackgroundStyle = .liquid
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var playCompletionSound = false // chime when a turn longer than ~1 min finishes
     lazy var completionSound: NSSound? = {
@@ -196,6 +226,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var completionPopoverTimer: Timer?
     var completionPopoverPositionTimer: Timer?
     var completionPopoverStatus: AgentStatus?
+    var didShowAutomationDeniedAlert = false
     var statusBarIconCentersBySource: [String: CGFloat] = [:]
     var iconColor: NSColor? { iconSystem ? nil : brand } // nil => render as an adaptive template
     let codeGlyphs = ["✻", "✽", "✶", "✳", "✢"]
@@ -250,6 +281,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         var title: String
         var startedAt: Double
         var ts: Double
+        var closedAt: Double = 0
         var transcript: String
         var client: String = ""
         var terminalApp: String = ""
@@ -257,6 +289,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         var tty: String = ""
         var isActive: Bool { state == "thinking" || state == "tool" || state == "permission" || state == "waiting" }
         var isAnimating: Bool { state == "thinking" || state == "tool" }
+        var isClosed: Bool { state == "closed" || closedAt > 0 }
+        var isDisplayableResult: Bool { state == "done" || isClosed }
     }
 
     override init() {
@@ -264,6 +298,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "dynamicStatusBackground") != nil { showDynamicStatusBackground = d.bool(forKey: "dynamicStatusBackground") }
+        if let s = d.string(forKey: "dynamicBackgroundStyle"), let st = DynamicBackgroundStyle(persistedValue: s) { dynamicBackgroundStyle = st }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
         if d.object(forKey: "completionPopup") != nil { showCompletionPopup = d.bool(forKey: "completionPopup") }
@@ -460,10 +495,24 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(header("Interface Effects"))
-        let backgroundItem = NSMenuItem(title: "Dynamic Liquid Background", action: #selector(toggleDynamicStatusBackground), keyEquivalent: "")
+        let backgroundItem = NSMenuItem(title: "Enable Dynamic Background", action: #selector(toggleDynamicStatusBackground), keyEquivalent: "")
         backgroundItem.target = self
         backgroundItem.state = showDynamicStatusBackground ? .on : .off
         menu.addItem(backgroundItem)
+
+        let styleItem = NSMenuItem(title: "Background Style", action: nil, keyEquivalent: "")
+        let styleMenu = NSMenu()
+        for style in DynamicBackgroundStyle.allCases {
+            let item = NSMenuItem(title: style.title, action: #selector(chooseDynamicBackgroundStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = style.rawValue
+            item.state = dynamicBackgroundStyle == style ? .on : .off
+            item.isEnabled = showDynamicStatusBackground
+            styleMenu.addItem(item)
+        }
+        styleItem.submenu = styleMenu
+        styleItem.isEnabled = showDynamicStatusBackground
+        menu.addItem(styleItem)
         return menu
     }
 
@@ -507,14 +556,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         icon.image = agentIcon(sessions.first ?? AgentStatus(source: title, state: "idle", label: "", project: "", tool: "", sessionId: "", title: "", startedAt: 0, ts: 0, transcript: ""), frame: frameIdx)
         header.addSubview(icon)
         header.addSubview(menuLabel(title, x: 28, y: 4, width: 70, height: 18, bold: true, size: 13, color: .labelColor))
-
-        let clickArea = NSButton(frame: header.bounds)
-        clickArea.title = ""
-        clickArea.isBordered = false
-        clickArea.target = self
-        clickArea.action = #selector(openAgentFromHeader(_:))
-        clickArea.tag = header.representedTag
-        header.addSubview(clickArea)
 
         parent.addSubview(quotaOverviewView(quota, x: 234, y: headerY - 6, width: width - 248))
 
@@ -563,19 +604,15 @@ final class StatusController: NSObject, NSMenuDelegate {
         row.addSubview(menuLabel(sessionTitle(status), x: 28, y: 2, width: 228, height: 18, size: 11, color: .labelColor, centerVertically: true))
         row.addSubview(menuLabel(statusText(status), x: 260, y: 2, width: 104, height: 18, size: 10, color: .secondaryLabelColor, alignRight: true, centerVertically: true))
 
-        let clickArea = NSButton(frame: row.bounds)
-        clickArea.title = ""
-        clickArea.isBordered = false
-        clickArea.target = self
-        clickArea.action = #selector(openSessionConversation(_:))
-        clickArea.tag = row.representedTag
-        row.addSubview(clickArea)
     }
 
     @objc func openSessionConversation(_ sender: AnyObject) {
         let tag = (sender as? SessionRowView)?.representedTag ?? (sender as? NSButton)?.tag ?? 0
-        guard let status = sessionDetailsByTag[tag] else { return }
-        openConversation(status)
+        guard let status = sessionDetailsByTag[tag] else { dbg("openSessionConversation tag=\(tag): NO STATUS"); return }
+        dbg("openSessionConversation tag=\(tag) source=\(status.source) client=\(status.client) state=\(status.state) isClosed=\(status.isClosed) tty=\(status.tty) bundleID=\(status.terminalBundleId)")
+        DispatchQueue.main.async { [weak self] in
+            self?.openConversation(status)
+        }
     }
 
     @objc func openAgentFromHeader(_ sender: AnyObject) {
@@ -592,19 +629,19 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func displaySessions(_ sessions: [AgentStatus], fallback: AgentStatus) -> [AgentStatus] {
         let active = sessions.filter { $0.isActive }
-        let done = sessions
-            .filter { !$0.isActive && $0.state == "done" }
+        let results = sessions
+            .filter { !$0.isActive && $0.isDisplayableResult }
             .sorted { $0.ts > $1.ts }
         // Running tasks present: show all of them, plus any just-finished ones alongside.
         if !active.isEmpty {
-            return (active + done).sorted {
+            return (active + results).sorted {
                 if $0.isActive != $1.isActive { return $0.isActive && !$1.isActive }
                 return $0.ts > $1.ts
             }
         }
         // Idle: keep finished tasks available so the menu can show the first few plus
         // a "+n more sessions" overflow row.
-        if !done.isEmpty { return done }
+        if !results.isEmpty { return results }
         return fallback.isActive ? [fallback] : []
     }
 
@@ -727,6 +764,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func statusColor(_ status: AgentStatus) -> NSColor {
+        if status.isClosed { return NSColor.secondaryLabelColor }
         switch status.state {
         case "permission": return amber
         case "thinking", "tool": return NSColor.systemBlue
@@ -784,6 +822,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func statusText(_ status: AgentStatus) -> String {
+        if status.isClosed { return "Closed" }
         switch status.state {
         case "thinking": return status.label.isEmpty ? "Thinking" : status.label
         case "tool": return status.label.isEmpty ? "Working" : status.label
@@ -819,8 +858,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func openConversation(_ status: AgentStatus) {
+        dbg("openConversation ENTER source=\(status.source) client=\(status.client) state=\(status.state) isClosed=\(status.isClosed)")
         let ws = NSWorkspace.shared
         if status.client.lowercased() == "cli" {
+            if !status.isClosed, openTerminalSession(status) { return }
+            if status.source == "Claude", status.isClosed, openClaudeCLISession(status) { return }
             if openTerminalSession(status) { return }
             if let transcript = transcriptPath(for: status) {
                 ws.open(URL(fileURLWithPath: transcript))
@@ -838,30 +880,111 @@ final class StatusController: NSObject, NSMenuDelegate {
         openAgentApp(status.source)
     }
 
+    func openClaudeCLISession(_ status: AgentStatus) -> Bool {
+        guard !status.sessionId.isEmpty else { return false }
+        let command = "claude --session \(shellQuoted(status.sessionId))"
+        let bundleID = status.terminalBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tty = status.tty.trimmingCharacters(in: .whitespacesAndNewlines)
+        if bundleID == "com.apple.Terminal" {
+            return runAppleScript(terminalRunScript(command: command, tty: tty))
+        }
+        if bundleID == "com.googlecode.iterm2" {
+            return runAppleScript(iTermRunScript(command: command, tty: tty))
+        }
+        return runAppleScript(terminalRunScript(command: command, tty: ""))
+    }
+
     func openTerminalSession(_ status: AgentStatus) -> Bool {
         let bundleID = status.terminalBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
         let tty = status.tty.trimmingCharacters(in: .whitespacesAndNewlines)
+        dbg("openTerminalSession bundleID=\(bundleID) tty=\(tty)")
         if !tty.isEmpty {
-            if bundleID == "com.apple.Terminal", runAppleScript(terminalSelectScript(tty: tty)) { return true }
+            if bundleID == "com.apple.Terminal" {
+                let ok = runAppleScript(terminalSelectScript(tty: tty))
+                dbg("Terminal select-script result=\(ok ? 1 : 0)")
+                if ok { return true }
+            }
             if bundleID == "com.googlecode.iterm2", runAppleScript(iTermSelectScript(tty: tty)) { return true }
         }
+        dbg("falling back to plain openApplication")
         guard !bundleID.isEmpty,
               let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return false }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         return true
     }
 
+    func terminalRunScript(command: String, tty: String) -> String {
+        let escapedCommand = appleScriptString(command)
+        let escapedTTY = appleScriptString(tty)
+        return """
+        \(appleScriptTTYHelpers())
+        tell application id "com.apple.Terminal"
+          activate
+          if \(escapedTTY) is not equal to "" then
+            repeat with w in windows
+              repeat with t in tabs of w
+                try
+                  if my ttyMatches((tty of t as string), \(escapedTTY)) then
+                    set index of w to 1
+                    set selected of t to true
+                    do script \(escapedCommand) in t
+                    return true
+                  end if
+                end try
+              end repeat
+            end repeat
+          end if
+          do script \(escapedCommand)
+        end tell
+        return true
+        """
+    }
+
+    func iTermRunScript(command: String, tty: String) -> String {
+        let escapedCommand = appleScriptString(command)
+        let escapedTTY = appleScriptString(tty)
+        return """
+        \(appleScriptTTYHelpers())
+        tell application id "com.googlecode.iterm2"
+          activate
+          if \(escapedTTY) is not equal to "" then
+            repeat with w in windows
+              repeat with t in tabs of w
+                repeat with s in sessions of t
+                  try
+                    if my ttyMatches((tty of s as string), \(escapedTTY)) then
+                      select s
+                      select t
+                      set index of w to 1
+                      tell s to write text \(escapedCommand)
+                      return true
+                    end if
+                  end try
+                end repeat
+              end repeat
+            end repeat
+          end if
+          if (count of windows) is 0 then
+            create window with default profile
+          end if
+          tell current session of current window to write text \(escapedCommand)
+        end tell
+        return true
+        """
+    }
+
     func terminalSelectScript(tty: String) -> String {
         let escapedTTY = appleScriptString(tty)
         return """
+        \(appleScriptTTYHelpers())
         tell application id "com.apple.Terminal"
           activate
           repeat with w in windows
             repeat with t in tabs of w
               try
-                if (tty of t as string) is equal to \(escapedTTY) then
-                  set selected tab of w to t
+                if my ttyMatches((tty of t as string), \(escapedTTY)) then
                   set index of w to 1
+                  set selected of t to true
                   return true
                 end if
               end try
@@ -875,13 +998,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     func iTermSelectScript(tty: String) -> String {
         let escapedTTY = appleScriptString(tty)
         return """
+        \(appleScriptTTYHelpers())
         tell application id "com.googlecode.iterm2"
           activate
           repeat with w in windows
             repeat with t in tabs of w
               repeat with s in sessions of t
                 try
-                  if (tty of s as string) is equal to \(escapedTTY) then
+                  if my ttyMatches((tty of s as string), \(escapedTTY)) then
                     select s
                     select t
                     set index of w to 1
@@ -896,16 +1020,77 @@ final class StatusController: NSObject, NSMenuDelegate {
         """
     }
 
+    func appleScriptTTYHelpers() -> String {
+        """
+        on normalizedTTY(v)
+          set s to v as string
+          if s starts with "/dev/" and (length of s) > 5 then
+            return text 6 thru -1 of s
+          end if
+          return s
+        end normalizedTTY
+
+        on ttyMatches(a, b)
+          set aa to my normalizedTTY(a)
+          set bb to my normalizedTTY(b)
+          return aa is not equal to "" and aa is equal to bb
+        end ttyMatches
+        """
+    }
+
+    // TEMP diagnostic: logs to both unified log and ~/.claude/statusbar/click-debug.log so we
+    // can trace the click path even when `log show` won't surface NSLog.
+    func dbg(_ msg: String) {
+        NSLog("vibego: %@", msg)
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/click-debug.log")
+        let line = "\(Date().timeIntervalSince1970) \(msg)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: path),
+           let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
     func runAppleScript(_ script: String) -> Bool {
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
         let result = appleScript?.executeAndReturnError(&error)
-        if error != nil { return false }
+        if let error {
+            dbg("AppleScript ERROR: \(error.description)")
+            if (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue == -1743 {
+                showAutomationDeniedAlert()
+            }
+            return false
+        }
         return result?.booleanValue == true
+    }
+
+    func showAutomationDeniedAlert() {
+        if didShowAutomationDeniedAlert { return }
+        didShowAutomationDeniedAlert = true
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "VibeGo needs permission to control Terminal"
+            alert.informativeText = "Allow VibeGo under System Settings > Privacy & Security > Automation so it can select the exact Terminal or iTerm tab for CLI sessions."
+            alert.addButton(withTitle: "Open Settings")
+            alert.addButton(withTitle: "OK")
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn,
+               let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                NSWorkspace.shared.open(url)
+            }
+            self.didShowAutomationDeniedAlert = false
+        }
     }
 
     func appleScriptString(_ value: String) -> String {
         "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     func conversationURL(for status: AgentStatus) -> URL? {
@@ -951,6 +1136,15 @@ final class StatusController: NSObject, NSMenuDelegate {
     @objc func toggleDynamicStatusBackground() {
         showDynamicStatusBackground.toggle()
         UserDefaults.standard.set(showDynamicStatusBackground, forKey: "dynamicStatusBackground")
+        animTimer?.invalidate(); animTimer = nil
+        renderAgents()
+    }
+
+    @objc func chooseDynamicBackgroundStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let style = DynamicBackgroundStyle(rawValue: raw) else { return }
+        dynamicBackgroundStyle = style
+        UserDefaults.standard.set(style.rawValue, forKey: "dynamicBackgroundStyle")
         animTimer?.invalidate(); animTimer = nil
         renderAgents()
     }
@@ -1068,7 +1262,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let button = self.statusItem.button, button.window != nil else { return }
-            let size = NSSize(width: 248, height: 50 + CompletionPopoverArrowView.size.height)
+            let size = NSSize(width: 223, height: 50 + CompletionPopoverArrowView.size.height)
             let panel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: size),
                 styleMask: [.borderless, .nonactivatingPanel],
@@ -1184,7 +1378,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func completionPopoverContent(for status: AgentStatus) -> NSViewController {
-        let width: CGFloat = 248, bodyHeight: CGFloat = 50, arrowHeight = CompletionPopoverArrowView.size.height
+        let width: CGFloat = 223, bodyHeight: CGFloat = 50, arrowHeight = CompletionPopoverArrowView.size.height
         let height = bodyHeight + arrowHeight
         let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         root.wantsLayer = true
@@ -1219,9 +1413,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         content.addSubview(iconView)
 
-        content.addSubview(menuLabel("Task complete", x: 52, y: bodyHeight - 25, width: width - 64, height: 17, bold: true, size: 12, color: .labelColor))
-        let detail = status.title.isEmpty ? status.source : "\(status.source): \(status.title)"
-        content.addSubview(menuLabel(detail, x: 52, y: 10, width: width - 64, height: 15, size: 10, color: .secondaryLabelColor))
+        // The session title is the popover's single line of text (the app icon already conveys
+        // the source). Vertically centered and given the full content width.
+        let title = status.title.isEmpty ? status.source : status.title
+        let titleHeight: CGFloat = 18
+        content.addSubview(menuLabel(title, x: 52, y: floor((bodyHeight - titleHeight) / 2), width: width - 64, height: titleHeight, bold: true, size: 13, color: .labelColor, centerVertically: true))
 
         let vc = NSViewController()
         if #available(macOS 26.0, *) {
@@ -1317,6 +1513,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let sessionId = current["sessionId"] as? String ?? ""
         let explicitTitle = current["title"] as? String ?? ""
         let ts = (current["ts"] as? NSNumber)?.doubleValue ?? 0
+        var closedAt = (current["closedAt"] as? NSNumber)?.doubleValue ?? 0
         var started = (current["startedAt"] as? NSNumber)?.doubleValue ?? 0
         let transcript = current["transcript"] as? String ?? ""
         let client = current["client"] as? String ?? ""
@@ -1341,14 +1538,19 @@ final class StatusController: NSObject, NSMenuDelegate {
             } else if !transcript.isEmpty,
                       let last = lastLine(ofFileAt: transcript),
                       last.contains("interrupted by user") {
-                state = "idle"; label = ""; started = 0
+                if source == "Claude", client.lowercased() == "cli" {
+                    state = "closed"; label = "Closed"; started = 0
+                    if closedAt == 0 { closedAt = ts > 0 ? ts : Date().timeIntervalSince1970 }
+                } else {
+                    state = "idle"; label = ""; started = 0
+                }
             }
         }
         var title = explicitTitle.isEmpty ? titleForSession(source: source, sessionId: sessionId) : explicitTitle
         if title.isEmpty, source == "Claude" {
             title = titleFromClaudeTranscript(transcript)
         }
-        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, transcript: transcript, client: client, terminalApp: terminalApp, terminalBundleId: terminalBundleId, tty: tty)
+        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, closedAt: closedAt, transcript: transcript, client: client, terminalApp: terminalApp, terminalBundleId: terminalBundleId, tty: tty)
     }
 
     func readSessionStatuses(in dir: String, source: String) -> [AgentStatus] {
@@ -1362,9 +1564,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             statuses.append(effectiveStatus(from: obj, source: source))
         }
         let now = Date().timeIntervalSince1970
-        // Keep active and finished sessions (the latter linger until SessionEnd deletes the
-        // file); only drop stale idle sessions that never reached a terminal state.
-        return statuses.filter { $0.isActive || $0.state == "done" || now - $0.ts < 300 }
+        // Keep active and recently finished sessions; only drop stale idle sessions that
+        // never reached a terminal state.
+        return statuses.filter { $0.isActive || $0.isDisplayableResult || now - $0.ts < 300 }
     }
 
     func refreshSessionTitles() {
@@ -1670,14 +1872,32 @@ final class StatusController: NSObject, NSMenuDelegate {
         func t(_ seconds: CGFloat) -> NSNumber {
             NSNumber(value: Double(seconds / total))
         }
-        func addCycle(start: CGFloat, axis: (x: CGFloat, y: CGFloat, z: CGFloat), values: inout [NSValue], keyTimes: inout [NSNumber]) {
+        func addFlipCycle(start: CGFloat, axis: (x: CGFloat, y: CGFloat, z: CGFloat), values: inout [NSValue], keyTimes: inout [NSNumber]) {
             values += [
                 rot(0, x: axis.x, y: axis.y, z: axis.z),
-                rot(90, x: axis.x, y: axis.y, z: axis.z),
-                rot(180, x: axis.x, y: axis.y, z: axis.z),
-                rot(270, x: axis.x, y: axis.y, z: axis.z),
-                rot(360, x: axis.x, y: axis.y, z: axis.z),
-                rot(360, x: axis.x, y: axis.y, z: axis.z),
+                rot(70, x: axis.x, y: axis.y, z: axis.z),
+                rot(0, x: axis.x, y: axis.y, z: axis.z),
+                rot(-70, x: axis.x, y: axis.y, z: axis.z),
+                rot(0, x: axis.x, y: axis.y, z: axis.z),
+                rot(0, x: axis.x, y: axis.y, z: axis.z),
+            ]
+            keyTimes += [
+                t(start),
+                t(start + step * 0.25),
+                t(start + step * 0.5),
+                t(start + step * 0.75),
+                t(start + step),
+                t(start + step + pause),
+            ]
+        }
+        func addSpinCycle(start: CGFloat, values: inout [NSValue], keyTimes: inout [NSNumber]) {
+            values += [
+                rot(0, x: 0, y: 0, z: 1),
+                rot(90, x: 0, y: 0, z: 1),
+                rot(180, x: 0, y: 0, z: 1),
+                rot(270, x: 0, y: 0, z: 1),
+                rot(360, x: 0, y: 0, z: 1),
+                rot(360, x: 0, y: 0, z: 1),
             ]
             keyTimes += [
                 t(start),
@@ -1691,9 +1911,9 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         var values: [NSValue] = []
         var keyTimes: [NSNumber] = []
-        addCycle(start: 0, axis: (0, 1, 0), values: &values, keyTimes: &keyTimes)
-        addCycle(start: step + pause, axis: (0, 0, 1), values: &values, keyTimes: &keyTimes)
-        addCycle(start: (step + pause) * 2, axis: (1, 0, 0), values: &values, keyTimes: &keyTimes)
+        addFlipCycle(start: 0, axis: (0, 1, 0), values: &values, keyTimes: &keyTimes)
+        addSpinCycle(start: step + pause, values: &values, keyTimes: &keyTimes)
+        addFlipCycle(start: (step + pause) * 2, axis: (1, 0, 0), values: &values, keyTimes: &keyTimes)
         anim.values = values
         anim.keyTimes = keyTimes
         anim.duration = CFTimeInterval(total)
@@ -1707,11 +1927,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     // pivots about its own center) drawn on top of the text-only button image. The baked
     // image omits the icon while flipping, so the elapsed-time text never rotates.
     func updateIconLayer(_ button: NSStatusBarButton, icon: NSImage, imageWidth: CGFloat, iconXOffset: CGFloat = 0) {
+        removeCombinedIconLayers(button)
         button.wantsLayer = true
         guard let host = button.layer else { return }
         host.masksToBounds = false
         let iconSize = NSSize(width: max(icon.size.width, 18), height: 18)
-        let flipPadding: CGFloat = 5
+        let flipPadding: CGFloat = 8
         let layerSize = NSSize(width: iconSize.width + flipPadding * 2, height: iconSize.height + flipPadding * 2)
         let paddedIcon = paddedIconImage(icon, iconSize: iconSize, canvasSize: layerSize)
         let layer = host.sublayers?.first { $0.name == "iconFlip" } ?? {
@@ -1720,11 +1941,68 @@ final class StatusController: NSObject, NSMenuDelegate {
         layer.masksToBounds = false
         layer.isDoubleSided = true
         layer.allowsEdgeAntialiasing = true
+        layer.zPosition = 10
         layer.contentsGravity = .resizeAspect
         layer.contentsScale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         layer.contents = paddedIcon.cgImage(forProposedRect: nil, context: nil, hints: nil)
         // The cell centers the image, so its left edge sits at (buttonWidth - imageWidth)/2;
         // the icon occupies the image's leftmost 18pt. Mirror that so the layer lines up.
+        let pad = max(0, (button.bounds.width - imageWidth) / 2)
+        let y = max(0, (button.bounds.height - iconSize.height) / 2)
+        layer.frame = CGRect(
+            x: pad + iconXOffset - flipPadding,
+            y: y - flipPadding,
+            width: layerSize.width,
+            height: layerSize.height
+        )
+        if layer.animation(forKey: "flip") == nil {
+            layer.add(iconFlipAnimation(), forKey: "flip")
+        }
+    }
+
+    func updateCombinedIconLayers(_ button: NSStatusBarButton, statuses: [AgentStatus], imageWidth: CGFloat, animatedBackground: Bool) {
+        button.layer?.sublayers?.first { $0.name == "iconFlip" }?.removeFromSuperlayer()
+        button.wantsLayer = true
+        guard let host = button.layer else { return }
+        host.masksToBounds = false
+        let activeSources = Set(statuses.filter(\.isAnimating).map(\.source))
+        host.sublayers?
+            .filter { ($0.name ?? "").hasPrefix("combinedIconFlip:") && !activeSources.contains(String(($0.name ?? "").dropFirst("combinedIconFlip:".count))) }
+            .forEach { $0.removeFromSuperlayer() }
+
+        let positions = statusBarSegmentIconLeftOffsets(for: statuses, animatedBackground: animatedBackground)
+        for status in statuses where status.isAnimating {
+            let source = status.source
+            guard let xOffset = positions[source] else { continue }
+            let icon = statusBarIcon(for: status)
+            updateNamedIconLayer(
+                button,
+                name: "combinedIconFlip:\(source)",
+                icon: icon,
+                imageWidth: imageWidth,
+                iconXOffset: xOffset
+            )
+        }
+        if activeSources.isEmpty { removeCombinedIconLayers(button) }
+    }
+
+    func updateNamedIconLayer(_ button: NSStatusBarButton, name: String, icon: NSImage, imageWidth: CGFloat, iconXOffset: CGFloat) {
+        button.wantsLayer = true
+        guard let host = button.layer else { return }
+        let iconSize = NSSize(width: max(icon.size.width, 18), height: 18)
+        let flipPadding: CGFloat = 8
+        let layerSize = NSSize(width: iconSize.width + flipPadding * 2, height: iconSize.height + flipPadding * 2)
+        let paddedIcon = paddedIconImage(icon, iconSize: iconSize, canvasSize: layerSize)
+        let layer = host.sublayers?.first { $0.name == name } ?? {
+            let l = CALayer(); l.name = name; host.addSublayer(l); return l
+        }()
+        layer.masksToBounds = false
+        layer.isDoubleSided = true
+        layer.allowsEdgeAntialiasing = true
+        layer.zPosition = 10
+        layer.contentsGravity = .resizeAspect
+        layer.contentsScale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        layer.contents = paddedIcon.cgImage(forProposedRect: nil, context: nil, hints: nil)
         let pad = max(0, (button.bounds.width - imageWidth) / 2)
         let y = max(0, (button.bounds.height - iconSize.height) / 2)
         layer.frame = CGRect(
@@ -1755,6 +2033,13 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func removeIconLayer(_ button: NSStatusBarButton) {
         button.layer?.sublayers?.first { $0.name == "iconFlip" }?.removeFromSuperlayer()
+        removeCombinedIconLayers(button)
+    }
+
+    func removeCombinedIconLayers(_ button: NSStatusBarButton) {
+        button.layer?.sublayers?
+            .filter { ($0.name ?? "").hasPrefix("combinedIconFlip:") }
+            .forEach { $0.removeFromSuperlayer() }
     }
 
     func applyTitle() {
@@ -1812,7 +2097,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         statusBarIconCentersBySource = statusBarSegmentIconCenters(for: statuses)
         let image = statusBarSegmentsImage(statuses.map {
             (
-                icon: statusBarIcon(for: $0),
+                icon: $0.isAnimating ? nil : statusBarIcon(for: $0),
                 text: statusBarDisplayText(label: statusBarLabel(for: $0), startedAt: $0.startedAt),
                 textColor: $0.state == "permission" ? amber : NSColor.labelColor
             )
@@ -1824,7 +2109,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         button.imagePosition = .imageOnly
         button.attributedTitle = NSAttributedString(string: "")
         button.title = ""
-        removeIconLayer(button)
+        updateCombinedIconLayers(button, statuses: statuses, imageWidth: image.size.width, animatedBackground: showDynamicStatusBackground)
     }
 
     func statusBarDisplayText(label: String, startedAt: Double) -> String {
@@ -1846,8 +2131,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         for (idx, status) in statuses.enumerated() {
             if idx > 0 { x += segmentGap }
-            let icon = statusBarIcon(for: status)
-            let iconWidth = max(icon.size.width, 18)
+            let iconWidth = max(statusBarIcon(for: status).size.width, 18)
             centers[status.source] = x + iconWidth / 2
             x += iconWidth
 
@@ -1859,6 +2143,28 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         return centers
+    }
+
+    func statusBarSegmentIconLeftOffsets(for statuses: [AgentStatus], animatedBackground: Bool) -> [String: CGFloat] {
+        let iconTextGap: CGFloat = 5
+        let segmentGap: CGFloat = 12
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        var x: CGFloat = animatedBackground ? activeStatusBarHorizontalPadding : 0
+        var offsets: [String: CGFloat] = [:]
+
+        for (idx, status) in statuses.enumerated() {
+            if idx > 0 { x += segmentGap }
+            offsets[status.source] = x
+            x += max(statusBarIcon(for: status).size.width, 18)
+
+            let text = statusBarDisplayText(label: statusBarLabel(for: status), startedAt: status.startedAt)
+            if !text.isEmpty {
+                let attrs: [NSAttributedString.Key: Any] = [.font: font]
+                x += iconTextGap + NSAttributedString(string: text, attributes: attrs).size().width
+            }
+        }
+
+        return offsets
     }
 
     // icon == nil reserves the icon's width but leaves it blank — used while the icon is
@@ -1893,7 +2199,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         return image
     }
 
-    func statusBarSegmentsImage(_ segments: [(icon: NSImage, text: String, textColor: NSColor)], animatedBackground: Bool = false) -> NSImage {
+    func statusBarSegmentsImage(_ segments: [(icon: NSImage?, text: String, textColor: NSColor)], animatedBackground: Bool = false) -> NSImage {
         let iconHeight: CGFloat = 18
         let height: CGFloat = animatedBackground ? 18 + activeStatusBarVerticalPadding * 2 : 18
         let iconTextGap: CGFloat = 5
@@ -1905,7 +2211,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                 .font: font,
             ]
             let textSize = segment.text.isEmpty ? .zero : NSAttributedString(string: segment.text, attributes: attrs).size()
-            return (segment: segment, attrs: attrs, textSize: textSize, iconWidth: max(segment.icon.size.width, 18))
+            return (segment: segment, attrs: attrs, textSize: textSize, iconWidth: max(segment.icon?.size.width ?? 18, 18))
         }
         let contentWidth = ceil(measured.enumerated().reduce(CGFloat(0)) { acc, item in
             let gap = item.offset == 0 ? CGFloat(0) : segmentGap
@@ -1921,7 +2227,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             for (idx, item) in measured.enumerated() {
                 if idx > 0 { x += segmentGap }
                 let iconY = floor((height - iconHeight) / 2)
-                item.segment.icon.draw(in: NSRect(x: x, y: iconY, width: item.iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
+                item.segment.icon?.draw(in: NSRect(x: x, y: iconY, width: item.iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
                 x += item.iconWidth
                 if !item.segment.text.isEmpty {
                     x += iconTextGap
@@ -1936,7 +2242,33 @@ final class StatusController: NSObject, NSMenuDelegate {
         return image
     }
 
+    // Linear RGBA blend (alpha included) between two colors. Used to ease a gradient's
+    // endpoints between a dim wash and a lit glow as the background breathes.
+    static func lerpColor(_ a: NSColor, _ b: NSColor, _ t: CGFloat) -> NSColor {
+        let a = a.usingColorSpace(.sRGB) ?? a
+        let b = b.usingColorSpace(.sRGB) ?? b
+        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
+        b.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        return NSColor(
+            srgbRed: ar + (br - ar) * t,
+            green: ag + (bg - ag) * t,
+            blue: ab + (bb - ab) * t,
+            alpha: aa + (ba - aa) * t
+        )
+    }
+
     func drawActiveStatusBarBackground(in rect: NSRect) {
+        switch dynamicBackgroundStyle {
+        case .liquid:
+            drawLiquidStatusBarBackground(in: rect)
+        case .breathing:
+            drawBreathingStatusBarBackground(in: rect)
+        }
+    }
+
+    func drawLiquidStatusBarBackground(in rect: NSRect) {
         let elapsed = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: dynamicStatusBackgroundCycle)
         let phase = CGFloat(elapsed / dynamicStatusBackgroundCycle)
         let capsule = rect.insetBy(dx: 0.5, dy: 1)
@@ -1968,6 +2300,47 @@ final class StatusController: NSObject, NSMenuDelegate {
         NSGraphicsContext.restoreGraphicsState()
 
         NSColor.separatorColor.withAlphaComponent(0.28).setStroke()
+        path.lineWidth = 0.7
+        path.stroke()
+    }
+
+    func drawBreathingStatusBarBackground(in rect: NSRect) {
+        let elapsed = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: dynamicStatusBackgroundCycle)
+        let phase = CGFloat(elapsed / dynamicStatusBackgroundCycle)
+        let capsule = rect.insetBy(dx: 0.5, dy: 1)
+        let path = NSBezierPath(roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+
+        // Pill base holds the capsule shape even at the dim end of the breath.
+        NSColor.controlBackgroundColor.withAlphaComponent(0.55).setFill()
+        capsule.fill()
+
+        // One smooth in-out breath per cycle: 0 → 1 → 0.
+        let breath = sin(phase * .pi)
+
+        // The gradient endpoints ease between a dim wash and a lit glow, so the colors
+        // themselves brighten and soften — not just a flat alpha tween. The blend midpoint
+        // also slides left↔right so the color flows along the pill instead of holding still.
+        let dim1 = NSColor(srgbRed: 0.50, green: 0.74, blue: 1.00, alpha: 0.10)
+        let dim2 = NSColor(srgbRed: 0.84, green: 0.66, blue: 1.00, alpha: 0.08)
+        let lit1 = NSColor(srgbRed: 0.58, green: 0.86, blue: 1.00, alpha: 0.46)
+        let lit2 = NSColor(srgbRed: 1.00, green: 0.72, blue: 0.90, alpha: 0.36)
+        let c1 = StatusController.lerpColor(dim1, lit1, breath)
+        let c2 = StatusController.lerpColor(dim2, lit2, breath)
+        let drift = 0.5 + sin(phase * .pi * 2) * 0.15 // blend midpoint: 0.35 ↔ 0.65
+        let mid = StatusController.lerpColor(c1, c2, 0.5)
+        if let grad = NSGradient(colors: [c1, mid, c2], atLocations: [0, drift, 1], colorSpace: .sRGB) {
+            grad.draw(in: capsule, angle: 0)
+        }
+
+        // Glassy inner light that brightens with the breath.
+        NSColor.white.withAlphaComponent(0.06 + breath * 0.12).setFill()
+        NSBezierPath(roundedRect: capsule.insetBy(dx: 1.2, dy: 1.2), xRadius: capsule.height / 2, yRadius: capsule.height / 2).fill()
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.separatorColor.withAlphaComponent(0.24).setStroke()
         path.lineWidth = 0.7
         path.stroke()
     }

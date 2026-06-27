@@ -81,14 +81,39 @@ function terminalMetadata() {
   return { terminalApp, terminalBundleId, tty };
 }
 
+function ttyOfPid(pid) {
+  try {
+    const t = require("child_process")
+      .execFileSync("ps", ["-p", String(pid), "-o", "tty="], { encoding: "utf8", timeout: 300 })
+      .trim();
+    if (t && t !== "??" && t !== "?") return t.startsWith("/") ? t : `/dev/${t}`;
+  } catch {}
+  return "";
+}
+
+function ppidOf(pid) {
+  try {
+    return Number(require("child_process")
+      .execFileSync("ps", ["-p", String(pid), "-o", "ppid="], { encoding: "utf8", timeout: 300 })
+      .trim());
+  } catch {
+    return 0;
+  }
+}
+
 function currentTTY() {
   if (process.env.TTY) return String(process.env.TTY);
-  try {
-    const tty = require("child_process")
-      .execFileSync("ps", ["-p", String(process.pid), "-o", "tty="], { encoding: "utf8", timeout: 300 })
-      .trim();
-    if (tty && tty !== "??") return tty.startsWith("/") ? tty : `/dev/${tty}`;
-  } catch {}
+  // Codex runs hooks as a detached child with no controlling terminal, so this node process's
+  // own tty is "??". Walk the parent chain up to the Codex CLI (which still owns the terminal
+  // tab) and borrow its tty — that's the tab VibeGo must switch to.
+  let pid = process.pid;
+  for (let i = 0; i < 12 && pid > 1; i++) {
+    const t = ttyOfPid(pid);
+    if (t) return t;
+    const ppid = ppidOf(pid);
+    if (!Number.isFinite(ppid) || ppid <= 1 || ppid === pid) break;
+    pid = ppid;
+  }
   return "";
 }
 

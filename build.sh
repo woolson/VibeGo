@@ -34,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>NSAppleEventsUsageDescription</key><string>VibeGo uses Apple Events to switch back to the Terminal or iTerm tab that owns a Claude Code or Codex CLI session.</string>
 </dict>
 </plist>
 PLIST
