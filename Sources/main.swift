@@ -68,6 +68,43 @@ final class PassthroughVisualEffectView: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+final class CompletionPopoverArrowView: NSView {
+    static let size = NSSize(width: 13, height: 7)
+
+    var fillColor = NSColor.windowBackgroundColor.withAlphaComponent(0.88) {
+        didSet { needsDisplay = true }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        fillColor.setFill()
+        let tipRadius = min(bounds.width, bounds.height) * 0.22
+        let shoulderInset = bounds.width * 0.12
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: bounds.midX - tipRadius, y: bounds.minY + tipRadius))
+        path.curve(
+            to: NSPoint(x: bounds.midX + tipRadius, y: bounds.minY + tipRadius),
+            controlPoint1: NSPoint(x: bounds.midX - tipRadius * 0.55, y: bounds.minY),
+            controlPoint2: NSPoint(x: bounds.midX + tipRadius * 0.55, y: bounds.minY)
+        )
+        path.curve(
+            to: NSPoint(x: bounds.maxX - shoulderInset, y: bounds.maxY),
+            controlPoint1: NSPoint(x: bounds.midX + bounds.width * 0.20, y: bounds.minY + tipRadius * 1.15),
+            controlPoint2: NSPoint(x: bounds.maxX - shoulderInset * 1.15, y: bounds.maxY)
+        )
+        path.line(to: NSPoint(x: shoulderInset, y: bounds.maxY))
+        path.curve(
+            to: NSPoint(x: bounds.midX - tipRadius, y: bounds.minY + tipRadius),
+            controlPoint1: NSPoint(x: shoulderInset * 1.15, y: bounds.maxY),
+            controlPoint2: NSPoint(x: bounds.midX - bounds.width * 0.20, y: bounds.minY + tipRadius * 1.15)
+        )
+        path.close()
+        path.fill()
+    }
+}
+
 final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
         var drawingRect = super.drawingRect(forBounds: rect)
@@ -82,8 +119,7 @@ final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
 }
 
 final class StatusController: NSObject, NSMenuDelegate {
-    let claudeStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let codexStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let statePath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.json")
     let claudeStatesDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/states.d")
     let claudeLimitsPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/limits.json")
@@ -141,6 +177,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     enum AnimStyle: String { case web, code, crab }
     var animStyle: AnimStyle = .web
     var showTimer = false
+    var showDynamicStatusBackground = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var playCompletionSound = false // chime when a turn longer than ~1 min finishes
     lazy var completionSound: NSSound? = {
@@ -159,6 +196,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var completionPopoverTimer: Timer?
     var completionPopoverPositionTimer: Timer?
     var completionPopoverStatus: AgentStatus?
+    var statusBarIconCentersBySource: [String: CGFloat] = [:]
     var iconColor: NSColor? { iconSystem ? nil : brand } // nil => render as an adaptive template
     let codeGlyphs = ["✻", "✽", "✶", "✳", "✢"]
     let codePeaks: [CGFloat] = [1.0, 1.0, 1.0, 1.0, 1.0]
@@ -167,6 +205,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     let codeCycle: Double = 3.8 // seconds for the full loop (lower = faster)
     lazy var codeGlyphMasks: [NSImage] = codeGlyphs.map { StatusController.glyphMask($0) }
     let crabFPS: Double = 12.5 // matches the source GIF's 0.08s frame delay
+    let dynamicStatusBackgroundFPS: Double = 30
+    let dynamicStatusBackgroundCycle: TimeInterval = 4.8
     lazy var crabFrames: [NSImage] = StatusController.decodePNGs(clawdCrabFramePNGs)
     var fps: Double {
         switch animStyle {
@@ -182,6 +222,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         case .crab: return max(1, crabFrames.count)
         }
     }
+    var statusRefreshFPS: Double {
+        showDynamicStatusBackground ? max(fps, dynamicStatusBackgroundFPS) : fps
+    }
+    let activeStatusBarHorizontalPadding: CGFloat = 6
+    let activeStatusBarVerticalPadding: CGFloat = 2
     struct LimitWindow {
         let usedPercent: Double
         let windowMinutes: Int
@@ -218,15 +263,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
+        if d.object(forKey: "dynamicStatusBackground") != nil { showDynamicStatusBackground = d.bool(forKey: "dynamicStatusBackground") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
         if d.object(forKey: "completionPopup") != nil { showCompletionPopup = d.bool(forKey: "completionPopup") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
         clearUserQuitSuppression()
-        configureStatusItem(claudeStatusItem)
-        configureStatusItem(codexStatusItem)
-        setStatusItem(codexStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: true)
-        setStatusItem(claudeStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0)
+        configureStatusItem(statusItem)
+        setStatusItem(statusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0)
         let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
@@ -301,8 +345,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: update check
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
-    let releaseAPIURL = "https://api.github.com/repos/woolson/VibeGo/releases/latest"
+    let releaseAPIURL = "https://api.github.com/repos/woolson/VibeGo/releases"
     let releasePageURL = "https://github.com/woolson/VibeGo/releases/latest"
+    let releaseLineResetDate = "2026-06-27T00:00:00Z"
 
     // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
     // See CLAUDE.md "Update check" for the privacy/behavior notes.
@@ -315,18 +360,38 @@ final class StatusController: NSObject, NSMenuDelegate {
         req.setValue("vibego", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
         URLSession.shared.dataTask(with: req) { data, _, _ in
             guard let data = data,
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = obj["tag_name"] as? String else { return }
+                  let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+            guard let obj = releases.first(where: { self.isReleaseInCurrentLine($0) }),
+                  let tag = obj["tag_name"] as? String else {
+                UserDefaults.standard.removeObject(forKey: "latestVersion")
+                UserDefaults.standard.removeObject(forKey: "latestReleaseURL")
+                UserDefaults.standard.set(false, forKey: "latestVersionIsCurrentLine")
+                UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
+                return
+            }
             let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             UserDefaults.standard.set(ver, forKey: "latestVersion")
+            if let htmlURL = obj["html_url"] as? String {
+                UserDefaults.standard.set(htmlURL, forKey: "latestReleaseURL")
+            }
+            UserDefaults.standard.set(true, forKey: "latestVersionIsCurrentLine")
             UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
         }.resume()
     }
 
+    func isReleaseInCurrentLine(_ release: [String: Any]) -> Bool {
+        if (release["draft"] as? Bool) == true { return false }
+        if (release["prerelease"] as? Bool) == true { return false }
+        guard let published = release["published_at"] as? String,
+              let publishedDate = ISO8601DateFormatter().date(from: published),
+              let resetDate = ISO8601DateFormatter().date(from: releaseLineResetDate) else { return false }
+        return publishedDate >= resetDate
+    }
+
     // Numeric component-wise compare so "0.0.10" > "0.0.9".
     func versionIsNewer(_ a: String, than b: String) -> Bool {
-        let pa = a.split(separator: ".").map { Int($0) ?? 0 }
-        let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+        let pa = versionComponents(a)
+        let pb = versionComponents(b)
         for i in 0..<max(pa.count, pb.count) {
             let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
             if x != y { return x > y }
@@ -334,8 +399,15 @@ final class StatusController: NSObject, NSMenuDelegate {
         return false
     }
 
+    func versionComponents(_ version: String) -> [Int] {
+        version
+            .split { !$0.isNumber }
+            .map { Int($0) ?? 0 }
+    }
+
     @objc func openLatestRelease() {
-        if let url = URL(string: releasePageURL) { NSWorkspace.shared.open(url) }
+        let cached = UserDefaults.standard.string(forKey: "latestReleaseURL")
+        if let url = URL(string: cached ?? releasePageURL) { NSWorkspace.shared.open(url) }
     }
 
     // MARK: menu
@@ -353,7 +425,10 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
-        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
+        let d = UserDefaults.standard
+        if d.bool(forKey: "latestVersionIsCurrentLine"),
+           let latest = d.string(forKey: "latestVersion"),
+           versionIsNewer(latest, than: currentVersion) {
             let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
             up.target = self
             menu.addItem(up)
@@ -365,6 +440,8 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func settingsMenu() -> NSMenu {
         let menu = NSMenu()
+
+        menu.addItem(header("Function Controls"))
         let timerItem = NSMenuItem(title: "Show timer", action: #selector(toggleTimer), keyEquivalent: "")
         timerItem.target = self
         timerItem.state = showTimer ? .on : .off
@@ -380,6 +457,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         popupItem.target = self
         popupItem.state = showCompletionPopup ? .on : .off
         menu.addItem(popupItem)
+
+        menu.addItem(.separator())
+        menu.addItem(header("Interface Effects"))
+        let backgroundItem = NSMenuItem(title: "Dynamic Liquid Background", action: #selector(toggleDynamicStatusBackground), keyEquivalent: "")
+        backgroundItem.target = self
+        backgroundItem.state = showDynamicStatusBackground ? .on : .off
+        menu.addItem(backgroundItem)
         return menu
     }
 
@@ -864,6 +948,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         renderAgents()
     }
 
+    @objc func toggleDynamicStatusBackground() {
+        showDynamicStatusBackground.toggle()
+        UserDefaults.standard.set(showDynamicStatusBackground, forKey: "dynamicStatusBackground")
+        animTimer?.invalidate(); animTimer = nil
+        renderAgents()
+    }
+
     @objc func toggleSound() {
         playCompletionSound.toggle()
         UserDefaults.standard.set(playCompletionSound, forKey: "completionSound")
@@ -962,23 +1053,22 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: completion popup
 
     // A transient toast that drops straight down from the status bar icon when a turn
-    // finishes. Always anchored to claudeStatusItem — it's the one item that stays
-    // visible at rest (the Codex item is zero-width/hidden when not animating).
+    // finishes. It is anchored to the single status item, which renders Claude and
+    // Codex together when both are active.
     func showCompletionPopover(for status: AgentStatus) {
         completionPopoverTimer?.invalidate()
         completionPopoverPositionTimer?.invalidate()
         dismissCompletionPopover(animated: false)
         completionPopoverStatus = status
-        claudeStatusItem.menu?.cancelTracking()
-        codexStatusItem.menu?.cancelTracking()
+        statusItem.menu?.cancelTracking()
 
         // Defer the anchor to the next runloop turn. renderAgents() just changed the
         // icon/label/width for the end of this turn; reading button.bounds before that
         // relayout settles would point the popover's arrow at the icon's old position.
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
-                  let button = self.claudeStatusItem.button, button.window != nil else { return }
-            let size = NSSize(width: 272, height: 68)
+                  let button = self.statusItem.button, button.window != nil else { return }
+            let size = NSSize(width: 248, height: 50 + CompletionPopoverArrowView.size.height)
             let panel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: size),
                 styleMask: [.borderless, .nonactivatingPanel],
@@ -1013,14 +1103,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func repositionCompletionPopover() {
-        guard let button = claudeStatusItem.button,
+        guard let button = statusItem.button,
               let buttonWindow = button.window,
               let toastWindow = completionWindow else { return }
 
         let buttonRectInWindow = button.convert(button.bounds, to: nil)
         let anchor = buttonWindow.convertToScreen(buttonRectInWindow)
+        let anchorXInButton = completionPopoverAnchorX(in: button)
+        let anchorScreenX = anchor.minX + anchorXInButton
         var frame = toastWindow.frame
-        frame.origin.x = anchor.midX - frame.width / 2
+        frame.origin.x = anchorScreenX - frame.width / 2
         frame.origin.y = anchor.minY - frame.height - 8
 
         if let screenFrame = buttonWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
@@ -1028,6 +1120,27 @@ final class StatusController: NSObject, NSMenuDelegate {
             frame.origin.y = min(max(frame.origin.y, screenFrame.minY + 6), screenFrame.maxY - frame.height - 6)
         }
         toastWindow.setFrame(frame, display: true)
+        updateCompletionPopoverArrow(anchorScreenX: anchorScreenX, windowFrame: frame)
+    }
+
+    func completionPopoverAnchorX(in button: NSStatusBarButton) -> CGFloat {
+        guard let status = completionPopoverStatus,
+              let iconCenter = statusBarIconCentersBySource[status.source] else {
+            return button.bounds.midX
+        }
+        let imageWidth = button.image?.size.width ?? button.bounds.width
+        let imagePad = max(0, (button.bounds.width - imageWidth) / 2)
+        return imagePad + iconCenter
+    }
+
+    func updateCompletionPopoverArrow(anchorScreenX: CGFloat, windowFrame: NSRect) {
+        guard let root = completionWindow?.contentViewController?.view else { return }
+        let arrow = root.subviews.first { $0.identifier?.rawValue == "completionPopoverArrow" }
+        let arrowWidth = CompletionPopoverArrowView.size.width
+        let minX = CGFloat(14)
+        let maxX = max(minX, root.bounds.width - arrowWidth - 14)
+        let x = min(max(anchorScreenX - windowFrame.minX - arrowWidth / 2, minX), maxX)
+        arrow?.frame.origin.x = x
     }
 
     func dismissCompletionPopover(animated: Bool, completion: (() -> Void)? = nil) {
@@ -1071,19 +1184,33 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func completionPopoverContent(for status: AgentStatus) -> NSViewController {
-        let width: CGFloat = 272, height: CGFloat = 68
-        let content = SessionRowView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        let width: CGFloat = 248, bodyHeight: CGFloat = 50, arrowHeight = CompletionPopoverArrowView.size.height
+        let height = bodyHeight + arrowHeight
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.clear.cgColor
+
+        let arrow = completionPopoverArrowView(frame: NSRect(x: (width - CompletionPopoverArrowView.size.width) / 2, y: bodyHeight, width: CompletionPopoverArrowView.size.width, height: arrowHeight))
+        arrow.autoresizingMask = []
+        root.addSubview(arrow)
+
+        let content = SessionRowView(frame: NSRect(x: 0, y: 0, width: width, height: bodyHeight))
         content.autoresizingMask = [.width, .height]
         content.target = self
         content.action = #selector(openCompletionPopoverConversation(_:))
         content.layer?.backgroundColor = NSColor.clear.cgColor
-        content.layer?.cornerRadius = 18
+        content.layer?.cornerRadius = 14
         content.layer?.masksToBounds = true
         if #available(macOS 10.15, *) {
             content.layer?.cornerCurve = .continuous
         }
 
-        let iconView = NSImageView(frame: NSRect(x: 17, y: (height - 28) / 2, width: 28, height: 28))
+        let appIconView = NSImageView(frame: NSRect(x: 14, y: (bodyHeight - 28) / 2, width: 28, height: 28))
+        appIconView.image = appIcon(for: status.source)
+        appIconView.imageScaling = .scaleProportionallyUpOrDown
+        content.addSubview(appIconView)
+
+        let iconView = NSImageView(frame: NSRect(x: 31, y: 9, width: 13, height: 13))
         if #available(macOS 11.0, *),
            let img = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Task complete") {
             img.isTemplate = true
@@ -1092,45 +1219,87 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         content.addSubview(iconView)
 
-        content.addSubview(menuLabel("Task complete", x: 56, y: height - 36, width: width - 74, height: 18, bold: true, size: 13, color: .labelColor))
+        content.addSubview(menuLabel("Task complete", x: 52, y: bodyHeight - 25, width: width - 64, height: 17, bold: true, size: 12, color: .labelColor))
         let detail = status.title.isEmpty ? status.source : "\(status.source): \(status.title)"
-        content.addSubview(menuLabel(detail, x: 56, y: 14, width: width - 74, height: 16, size: 11, color: .secondaryLabelColor))
+        content.addSubview(menuLabel(detail, x: 52, y: 10, width: width - 64, height: 15, size: 10, color: .secondaryLabelColor))
 
         let vc = NSViewController()
         if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-            glass.cornerRadius = 18
+            let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: width, height: bodyHeight))
+            glass.cornerRadius = 14
             glass.tintColor = brand.withAlphaComponent(0.08)
             glass.style = .regular
             glass.contentView = content
-            vc.view = glass
+            root.addSubview(glass, positioned: .below, relativeTo: arrow)
+            vc.view = root
         } else {
-            let root = SessionRowView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-            root.target = self
-            root.action = #selector(openCompletionPopoverConversation(_:))
-            root.layer?.backgroundColor = NSColor.clear.cgColor
-            root.layer?.cornerRadius = 18
-            root.layer?.masksToBounds = true
-            if #available(macOS 10.15, *) {
-                root.layer?.cornerCurve = .continuous
-            }
-
-            let blur = PassthroughVisualEffectView(frame: root.bounds)
+            let blur = PassthroughVisualEffectView(frame: content.bounds)
             blur.autoresizingMask = [.width, .height]
             blur.blendingMode = .behindWindow
             blur.material = .popover
             blur.state = .active
             blur.wantsLayer = true
-            blur.layer?.cornerRadius = 18
+            blur.layer?.cornerRadius = 14
             blur.layer?.masksToBounds = true
             if #available(macOS 10.15, *) {
                 blur.layer?.cornerCurve = .continuous
             }
-            root.addSubview(blur)
-            root.addSubview(content)
+            content.addSubview(blur, positioned: .below, relativeTo: nil)
+            root.addSubview(content, positioned: .below, relativeTo: arrow)
             vc.view = root
         }
         return vc
+    }
+
+    func completionPopoverArrowView(frame: NSRect) -> NSView {
+        let view: NSView
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView(frame: frame)
+            glass.cornerRadius = 0
+            glass.tintColor = brand.withAlphaComponent(0.08)
+            glass.style = .regular
+            glass.wantsLayer = true
+            glass.layer?.mask = completionPopoverArrowMask(size: frame.size)
+            view = glass
+        } else {
+            let arrow = CompletionPopoverArrowView(frame: frame)
+            arrow.fillColor = NSColor.windowBackgroundColor.withAlphaComponent(0.88)
+            view = arrow
+        }
+        view.identifier = NSUserInterfaceItemIdentifier("completionPopoverArrow")
+        return view
+    }
+
+    func completionPopoverArrowMask(size: NSSize) -> CALayer {
+        let path = CGMutablePath()
+        let tipRadius = min(size.width, size.height) * 0.22
+        let shoulderInset = size.width * 0.12
+        let midX = size.width / 2
+        let tipY = size.height - tipRadius
+
+        path.move(to: CGPoint(x: midX - tipRadius, y: tipY))
+        path.addCurve(
+            to: CGPoint(x: midX + tipRadius, y: tipY),
+            control1: CGPoint(x: midX - tipRadius * 0.55, y: size.height),
+            control2: CGPoint(x: midX + tipRadius * 0.55, y: size.height)
+        )
+        path.addCurve(
+            to: CGPoint(x: size.width - shoulderInset, y: 0),
+            control1: CGPoint(x: midX + size.width * 0.20, y: tipY - tipRadius * 0.15),
+            control2: CGPoint(x: size.width - shoulderInset * 1.15, y: 0)
+        )
+        path.addLine(to: CGPoint(x: shoulderInset, y: 0))
+        path.addCurve(
+            to: CGPoint(x: midX - tipRadius, y: tipY),
+            control1: CGPoint(x: shoulderInset * 1.15, y: 0),
+            control2: CGPoint(x: midX - size.width * 0.20, y: tipY - tipRadius * 0.15)
+        )
+        path.closeSubpath()
+
+        let mask = CAShapeLayer()
+        mask.frame = CGRect(origin: .zero, size: size)
+        mask.path = path
+        return mask
     }
 
     @objc func openCompletionPopoverConversation(_ sender: AnyObject) {
@@ -1319,9 +1488,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         startedAt = active.compactMap { $0.startedAt > 0 ? $0.startedAt : nil }.min() ?? 0
         activeColor = iconColor
 
-        if animate {
+        if animate || (!active.isEmpty && showDynamicStatusBackground) {
             if animTimer == nil {
-                let t = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in self?.animStep() }
+                let t = Timer(timeInterval: 1.0 / statusRefreshFPS, repeats: true) { [weak self] _ in self?.animStep() }
                 RunLoop.main.add(t, forMode: .common)
                 animTimer = t
             }
@@ -1333,27 +1502,29 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func renderStatusItems(_ active: [AgentStatus]) {
-        setStatusItem(codexStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: true)
-
         if active.isEmpty {
-            setStatusItem(claudeStatusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: false)
+            statusBarIconCentersBySource = [:]
+            setStatusItem(statusItem, icon: vibeGoStatusBarIcon(), label: "", startedAt: 0, hidden: false)
             return
         }
 
         if active.count > 1 {
-            setCombinedStatusItem(claudeStatusItem, statuses: active)
+            setCombinedStatusItem(statusItem, statuses: active)
             return
         }
 
         let status = active[0]
+        let iconPadding = showDynamicStatusBackground ? activeStatusBarHorizontalPadding : 0
+        statusBarIconCentersBySource = [status.source: iconPadding + max(statusBarIcon(for: status).size.width, 18) / 2]
         setStatusItem(
-            claudeStatusItem,
+            statusItem,
             icon: statusBarIcon(for: status),
             label: statusBarLabel(for: status),
             startedAt: status.startedAt,
             hidden: false,
             textColor: status.state == "permission" ? amber : NSColor.labelColor,
-            flipIcon: status.isAnimating
+            flipIcon: status.isAnimating,
+            animatedBackground: showDynamicStatusBackground
         )
     }
 
@@ -1452,7 +1623,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: render
 
     func render(label: String, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
-        guard let button = claudeStatusItem.button else { return }
+        guard let button = statusItem.button else { return }
         button.contentTintColor = nil // we paint the icon color ourselves; template-tint is unreliable
         activeBase = label
         activeColor = color
@@ -1460,7 +1631,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         if animate {
             if animTimer == nil {
-                let t = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in self?.animStep() }
+                let t = Timer(timeInterval: 1.0 / statusRefreshFPS, repeats: true) { [weak self] _ in self?.animStep() }
                 RunLoop.main.add(t, forMode: .common)
                 animTimer = t
             }
@@ -1535,24 +1706,51 @@ final class StatusController: NSObject, NSMenuDelegate {
     // The icon flips alone: it lives in its own sublayer (default anchorPoint .5,.5, so it
     // pivots about its own center) drawn on top of the text-only button image. The baked
     // image omits the icon while flipping, so the elapsed-time text never rotates.
-    func updateIconLayer(_ button: NSStatusBarButton, icon: NSImage, imageWidth: CGFloat) {
+    func updateIconLayer(_ button: NSStatusBarButton, icon: NSImage, imageWidth: CGFloat, iconXOffset: CGFloat = 0) {
         button.wantsLayer = true
         guard let host = button.layer else { return }
+        host.masksToBounds = false
         let iconSize = NSSize(width: max(icon.size.width, 18), height: 18)
+        let flipPadding: CGFloat = 5
+        let layerSize = NSSize(width: iconSize.width + flipPadding * 2, height: iconSize.height + flipPadding * 2)
+        let paddedIcon = paddedIconImage(icon, iconSize: iconSize, canvasSize: layerSize)
         let layer = host.sublayers?.first { $0.name == "iconFlip" } ?? {
             let l = CALayer(); l.name = "iconFlip"; host.addSublayer(l); return l
         }()
+        layer.masksToBounds = false
+        layer.isDoubleSided = true
+        layer.allowsEdgeAntialiasing = true
         layer.contentsGravity = .resizeAspect
         layer.contentsScale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        layer.contents = icon.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        layer.contents = paddedIcon.cgImage(forProposedRect: nil, context: nil, hints: nil)
         // The cell centers the image, so its left edge sits at (buttonWidth - imageWidth)/2;
         // the icon occupies the image's leftmost 18pt. Mirror that so the layer lines up.
         let pad = max(0, (button.bounds.width - imageWidth) / 2)
         let y = max(0, (button.bounds.height - iconSize.height) / 2)
-        layer.frame = CGRect(x: pad, y: y, width: iconSize.width, height: iconSize.height)
+        layer.frame = CGRect(
+            x: pad + iconXOffset - flipPadding,
+            y: y - flipPadding,
+            width: layerSize.width,
+            height: layerSize.height
+        )
         if layer.animation(forKey: "flip") == nil {
             layer.add(iconFlipAnimation(), forKey: "flip")
         }
+    }
+
+    func paddedIconImage(_ icon: NSImage, iconSize: NSSize, canvasSize: NSSize) -> NSImage {
+        let img = NSImage(size: canvasSize, flipped: false) { _ in
+            let rect = NSRect(
+                x: floor((canvasSize.width - iconSize.width) / 2),
+                y: floor((canvasSize.height - iconSize.height) / 2),
+                width: iconSize.width,
+                height: iconSize.height
+            )
+            icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        img.isTemplate = false
+        return img
     }
 
     func removeIconLayer(_ button: NSStatusBarButton) {
@@ -1560,7 +1758,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func applyTitle() {
-        guard let button = claudeStatusItem.button else { return }
+        guard let button = statusItem.button else { return }
         var text = activeBase
         if showTimer, startedAt > 0 {
             let secs = max(0, Int(Date().timeIntervalSince1970 - startedAt))
@@ -1582,12 +1780,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         button.attributedTitle = NSAttributedString(string: " \(text)", attributes: attrs)
     }
 
-    func setStatusItem(_ item: NSStatusItem, icon: NSImage, label: String, startedAt: Double, hidden: Bool = false, textColor: NSColor = .labelColor, flipIcon: Bool = false) {
+    func setStatusItem(_ item: NSStatusItem, icon: NSImage, label: String, startedAt: Double, hidden: Bool = false, textColor: NSColor = .labelColor, flipIcon: Bool = false, animatedBackground: Bool = false) {
         guard let button = item.button else { return }
         let text = statusBarDisplayText(label: label, startedAt: startedAt)
         // While flipping, draw the text only (icon omitted) and let the animating sublayer
         // supply the icon, so the 3D flip applies to the icon alone.
-        let image = hidden ? nil : statusBarItemImage(icon: flipIcon ? nil : icon, text: text, textColor: textColor)
+        let image: NSImage?
+        if hidden {
+            image = nil
+        } else if text.isEmpty && !flipIcon {
+            image = animatedBackground ? statusBarItemImage(icon: icon, text: "", textColor: textColor, animatedBackground: true) : icon
+        } else {
+            image = statusBarItemImage(icon: flipIcon ? nil : icon, text: text, textColor: textColor, animatedBackground: animatedBackground)
+        }
         item.length = hidden ? 0 : ((image?.size.width ?? 18) + 8)
         button.isHidden = hidden
         button.contentTintColor = nil
@@ -1598,19 +1803,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         if hidden || !flipIcon {
             removeIconLayer(button)
         } else {
-            updateIconLayer(button, icon: icon, imageWidth: image?.size.width ?? 18)
+            updateIconLayer(button, icon: icon, imageWidth: image?.size.width ?? 18, iconXOffset: animatedBackground ? activeStatusBarHorizontalPadding : 0)
         }
     }
 
     func setCombinedStatusItem(_ item: NSStatusItem, statuses: [AgentStatus]) {
         guard let button = item.button else { return }
+        statusBarIconCentersBySource = statusBarSegmentIconCenters(for: statuses)
         let image = statusBarSegmentsImage(statuses.map {
             (
                 icon: statusBarIcon(for: $0),
                 text: statusBarDisplayText(label: statusBarLabel(for: $0), startedAt: $0.startedAt),
                 textColor: $0.state == "permission" ? amber : NSColor.labelColor
             )
-        })
+        }, animatedBackground: showDynamicStatusBackground)
         item.length = image.size.width + 8
         button.isHidden = false
         button.contentTintColor = nil
@@ -1631,12 +1837,36 @@ final class StatusController: NSObject, NSMenuDelegate {
         return text
     }
 
+    func statusBarSegmentIconCenters(for statuses: [AgentStatus]) -> [String: CGFloat] {
+        let iconTextGap: CGFloat = 5
+        let segmentGap: CGFloat = 12
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        var x: CGFloat = showDynamicStatusBackground ? activeStatusBarHorizontalPadding : 0
+        var centers: [String: CGFloat] = [:]
+
+        for (idx, status) in statuses.enumerated() {
+            if idx > 0 { x += segmentGap }
+            let icon = statusBarIcon(for: status)
+            let iconWidth = max(icon.size.width, 18)
+            centers[status.source] = x + iconWidth / 2
+            x += iconWidth
+
+            let text = statusBarDisplayText(label: statusBarLabel(for: status), startedAt: status.startedAt)
+            if !text.isEmpty {
+                let attrs: [NSAttributedString.Key: Any] = [.font: font]
+                x += iconTextGap + NSAttributedString(string: text, attributes: attrs).size().width
+            }
+        }
+
+        return centers
+    }
+
     // icon == nil reserves the icon's width but leaves it blank — used while the icon is
     // flipping in its own sublayer, so the text stays in exactly the same place.
-    func statusBarItemImage(icon: NSImage?, text: String, textColor: NSColor = .labelColor) -> NSImage {
+    func statusBarItemImage(icon: NSImage?, text: String, textColor: NSColor = .labelColor, animatedBackground: Bool = false) -> NSImage {
         let iconWidth = max(icon?.size.width ?? 18, 18)
         let iconHeight: CGFloat = 18
-        let height: CGFloat = 18
+        let height: CGFloat = animatedBackground ? 18 + activeStatusBarVerticalPadding * 2 : 18
         let gap: CGFloat = text.isEmpty ? 0 : 5
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let attrs: [NSAttributedString.Key: Any] = [
@@ -1644,12 +1874,18 @@ final class StatusController: NSObject, NSMenuDelegate {
             .font: font,
         ]
         let textSize = text.isEmpty ? .zero : NSAttributedString(string: text, attributes: attrs).size()
-        let width = ceil(iconWidth + gap + textSize.width)
+        let contentWidth = ceil(iconWidth + gap + textSize.width)
+        let width = contentWidth + (animatedBackground ? activeStatusBarHorizontalPadding * 2 : 0)
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
-            icon?.draw(in: NSRect(x: 0, y: 0, width: iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
+            if animatedBackground {
+                self.drawActiveStatusBarBackground(in: NSRect(origin: .zero, size: NSSize(width: width, height: height)))
+            }
+            let contentX = animatedBackground ? self.activeStatusBarHorizontalPadding : 0
+            let iconY = floor((height - iconHeight) / 2)
+            icon?.draw(in: NSRect(x: contentX, y: iconY, width: iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
             if !text.isEmpty {
                 let textY = floor((height - textSize.height) / 2)
-                text.draw(at: NSPoint(x: iconWidth + gap, y: textY), withAttributes: attrs)
+                text.draw(at: NSPoint(x: contentX + iconWidth + gap, y: textY), withAttributes: attrs)
             }
             return true
         }
@@ -1657,9 +1893,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         return image
     }
 
-    func statusBarSegmentsImage(_ segments: [(icon: NSImage, text: String, textColor: NSColor)]) -> NSImage {
+    func statusBarSegmentsImage(_ segments: [(icon: NSImage, text: String, textColor: NSColor)], animatedBackground: Bool = false) -> NSImage {
         let iconHeight: CGFloat = 18
-        let height: CGFloat = 18
+        let height: CGFloat = animatedBackground ? 18 + activeStatusBarVerticalPadding * 2 : 18
         let iconTextGap: CGFloat = 5
         let segmentGap: CGFloat = 12
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -1671,16 +1907,21 @@ final class StatusController: NSObject, NSMenuDelegate {
             let textSize = segment.text.isEmpty ? .zero : NSAttributedString(string: segment.text, attributes: attrs).size()
             return (segment: segment, attrs: attrs, textSize: textSize, iconWidth: max(segment.icon.size.width, 18))
         }
-        let width = ceil(measured.enumerated().reduce(CGFloat(0)) { acc, item in
+        let contentWidth = ceil(measured.enumerated().reduce(CGFloat(0)) { acc, item in
             let gap = item.offset == 0 ? CGFloat(0) : segmentGap
             let textGap = item.element.segment.text.isEmpty ? CGFloat(0) : iconTextGap
             return acc + gap + item.element.iconWidth + textGap + item.element.textSize.width
         })
+        let width = contentWidth + (animatedBackground ? activeStatusBarHorizontalPadding * 2 : 0)
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
-            var x: CGFloat = 0
+            if animatedBackground {
+                self.drawActiveStatusBarBackground(in: NSRect(origin: .zero, size: NSSize(width: width, height: height)))
+            }
+            var x: CGFloat = animatedBackground ? self.activeStatusBarHorizontalPadding : 0
             for (idx, item) in measured.enumerated() {
                 if idx > 0 { x += segmentGap }
-                item.segment.icon.draw(in: NSRect(x: x, y: 0, width: item.iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
+                let iconY = floor((height - iconHeight) / 2)
+                item.segment.icon.draw(in: NSRect(x: x, y: iconY, width: item.iconWidth, height: iconHeight), from: .zero, operation: .sourceOver, fraction: 1)
                 x += item.iconWidth
                 if !item.segment.text.isEmpty {
                     x += iconTextGap
@@ -1693,6 +1934,42 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         image.isTemplate = false
         return image
+    }
+
+    func drawActiveStatusBarBackground(in rect: NSRect) {
+        let elapsed = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: dynamicStatusBackgroundCycle)
+        let phase = CGFloat(elapsed / dynamicStatusBackgroundCycle)
+        let capsule = rect.insetBy(dx: 0.5, dy: 1)
+        let path = NSBezierPath(roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+
+        NSColor.controlBackgroundColor.withAlphaComponent(0.52).setFill()
+        capsule.fill()
+
+        let colors = [
+            NSColor(srgbRed: 0.58, green: 0.86, blue: 1.00, alpha: 0.30),
+            NSColor(srgbRed: 0.96, green: 0.68, blue: 0.94, alpha: 0.24),
+            NSColor(srgbRed: 1.00, green: 0.88, blue: 0.55, alpha: 0.22),
+        ]
+        let bandWidth = max(capsule.width * 0.72, 38)
+        for (idx, color) in colors.enumerated() {
+            let offset = (phase + CGFloat(idx) / CGFloat(colors.count)).truncatingRemainder(dividingBy: 1)
+            let x = capsule.minX - bandWidth + offset * (capsule.width + bandWidth * 2)
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: x, y: capsule.minY - capsule.height * 0.42, width: bandWidth, height: capsule.height * 1.84)).fill()
+        }
+
+        NSColor.white.withAlphaComponent(0.30).setFill()
+        let shineWidth = max(12, capsule.width * 0.20)
+        let shineX = capsule.minX - shineWidth + phase * (capsule.width + shineWidth * 2)
+        NSBezierPath(roundedRect: NSRect(x: shineX, y: capsule.minY + 1, width: shineWidth, height: capsule.height - 2), xRadius: capsule.height / 2, yRadius: capsule.height / 2).fill()
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.separatorColor.withAlphaComponent(0.28).setStroke()
+        path.lineWidth = 0.7
+        path.stroke()
     }
 
     func applyTitle(to button: NSStatusBarButton, label: String, startedAt: Double) {
@@ -1812,12 +2089,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         return claudeApplicationIcon ?? restingIcon(color: iconColor)
     }
 
-    // A single-color menu-bar version of the vibego app icon: a white status bead with the
-    // app icon's V simplified as a negative-space cutout.
+    // A template menu-bar version of the VibeGo app icon. The filled alpha becomes the
+    // system status item color, so it adapts on light and dark menu bar backgrounds.
     func vibeGoStatusBarIcon(showsDot: Bool = false) -> NSImage {
         let s: CGFloat = 18
         let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
-            NSColor.white.setFill()
+            NSColor.black.setFill()
             NSBezierPath(ovalIn: NSRect(x: 1.17, y: 1.17, width: 15.66, height: 15.66)).fill()
 
             let v = NSBezierPath()
@@ -1843,12 +2120,12 @@ final class StatusController: NSObject, NSMenuDelegate {
             }
 
             if showsDot {
-                NSColor.white.setFill()
+                NSColor.black.setFill()
                 NSBezierPath(ovalIn: NSRect(x: 12.2, y: 2.0, width: 3.2, height: 3.2)).fill()
             }
             return true
         }
-        img.isTemplate = false
+        img.isTemplate = true
         return img
     }
 
