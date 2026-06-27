@@ -1,9 +1,9 @@
-## vibego
+## VibeGo
 
 [中文](README.zh-CN.md)
 
 <p>
-  <img src="assets/vibego-icon-concept.png" alt="vibego app icon" width="96" align="right">
+  <img src="assets/vibego-icon-concept.png" alt="VibeGo app icon" width="96" align="right">
 </p>
 
 A tiny macOS menu bar app that shows **Claude Code and Codex live status**: animated icons while agents are thinking or running tools, a yellow permission state when they need you, elapsed timers for active turns, completion feedback, and Codex quota details. Lightweight, no window, no dock icon, no dashboards.
@@ -15,7 +15,7 @@ Built so you can tab away during a long run and still see, at a glance, whether 
 
 ## Demo
 
-![vibego demo](screenshots/demo.gif)
+![VibeGo demo](screenshots/demo.gif)
 
 [Watch the MP4 demo](screenshots/demo.mp4)
 
@@ -46,7 +46,7 @@ Built so you can tab away during a long run and still see, at a glance, whether 
 - **Thinking / working** — the status icon animates with a live `1m 12s` timer.
 - **Running a tool** — a short label such as `Editing`, `Reading`, `Running command`, or `Using tool`.
 - **Awaiting permission** — a paused yellow state when Claude Code or Codex needs approval.
-- **Task complete** — returns to the resting vibego icon, with optional completion sound and popup.
+- **Task complete** — returns to the resting VibeGo icon, with optional completion sound and popup.
 - **Claude + Codex together** — tracks both agents from their hook state files and combines active sessions into one menu-bar readout when needed.
 - **Session menu** — shows recent Claude and Codex sessions, including project/title and status, with overflow when there are many sessions.
 - **Open the right place** — opens app conversations when available; for terminal sessions it can return to the matching Terminal/iTerm tab from the recorded TTY.
@@ -83,7 +83,7 @@ Everything is controlled from the menu:
 Signed and notarized. Open it, drag the app to Applications, launch once.
 
 1. Download the latest `VibeGo.dmg` from [Releases](../../releases).
-2. Open it and drag **vibego** into Applications.
+2. Open it and drag **VibeGo** into Applications.
 3. Launch it once. On first launch it wires up the Claude Code and Codex hooks for you automatically.
 4. Start a new Claude Code or Codex session, the icon updates whenever an agent is active.
 
@@ -101,7 +101,7 @@ Installs the hooks (status + open/close lifecycle) automatically from inside Cla
 /plugin install vibego@VibeGo
 ```
 
-The plugin installs the hooks but not the app itself, so drag **vibego** into Applications once (from the DMG). The plugin launches it automatically on session start unless you explicitly quit the app.
+The plugin installs the hooks but not the app itself, so drag **VibeGo** into Applications once (from the DMG). The plugin launches it automatically on session start unless you explicitly quit the app.
 
 ## How it works
 
@@ -113,7 +113,7 @@ The installer merges its hooks into `~/.claude/settings.json` (backing it up fir
 
 ## Acknowledgements
 
-vibego is built on top of the ideas and groundwork from the original [claude-statusbar](https://github.com/m1ckc3s/claude-status-bar) project. Thank you to the original author for making a small, useful menu-bar status idea open and hackable.
+VibeGo is built on top of the ideas and groundwork from the original [claude-statusbar](https://github.com/m1ckc3s/claude-status-bar) project. Thank you to the original author for making a small, useful menu-bar status idea open and hackable.
 
 ## Uninstall
 

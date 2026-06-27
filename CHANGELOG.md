@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to vibego are documented here. This project follows
+All notable changes to VibeGo are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
 ## [0.2.2] - 2026-06-25
