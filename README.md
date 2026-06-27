@@ -25,17 +25,21 @@ Built so you can tab away during a long run and still see, at a glance, whether 
 
 **Status bar**
 
-| Idle | Thinking | Tool | Permission |
-|---|---|---|---|
-| ![Idle status bar](screenshots/preview-idle.png) | ![Thinking status bar with timer](screenshots/preview-thinking.png) | ![Tool status bar](screenshots/preview-tool.png) | ![Permission status bar](screenshots/preview-permission.png) |
+| Idle | Thinking | Tool |
+|---|---|---|
+| ![Idle status bar](screenshots/preview-idle.png) | ![Thinking status bar with timer](screenshots/preview-thinking.png) | ![Tool status bar](screenshots/preview-tool.png) |
+
+| Permission | Claude + Codex |
+|---|---|
+| ![Permission status bar](screenshots/preview-permission.png) | ![Combined Claude and Codex status bar](screenshots/preview-combined.png) |
 
 **Task complete**
 
 ![Task complete status bar](screenshots/preview-done.png)
 
-**Popup and quota details**
+**Completion popup**
 
-![Codex quota details popup](screenshots/preview-quota-details.png)
+![Completion popup](screenshots/preview-completion-popup.png)
 
 ## What it shows
 

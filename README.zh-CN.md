@@ -25,17 +25,21 @@ vibego 是一个轻量的 macOS 菜单栏应用，用来显示 **Claude Code 和
 
 **状态栏**
 
-| 空闲 | 思考中 | 运行工具 | 等待授权 |
-|---|---|---|---|
-| ![Idle status bar](screenshots/preview-idle.png) | ![Thinking status bar with timer](screenshots/preview-thinking.png) | ![Tool status bar](screenshots/preview-tool.png) | ![Permission status bar](screenshots/preview-permission.png) |
+| 空闲 | 思考中 | 运行工具 |
+|---|---|---|
+| ![Idle status bar](screenshots/preview-idle.png) | ![Thinking status bar with timer](screenshots/preview-thinking.png) | ![Tool status bar](screenshots/preview-tool.png) |
+
+| 等待授权 | Claude + Codex |
+|---|---|
+| ![Permission status bar](screenshots/preview-permission.png) | ![Combined Claude and Codex status bar](screenshots/preview-combined.png) |
 
 **任务完成**
 
 ![Task complete status bar](screenshots/preview-done.png)
 
-**弹窗和限额详情**
+**完成弹窗**
 
-![Codex quota details popup](screenshots/preview-quota-details.png)
+![Completion popup](screenshots/preview-completion-popup.png)
 
 ## 它会显示什么
 
