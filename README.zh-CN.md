@@ -49,7 +49,7 @@ VibeGo 是一个轻量的 macOS 菜单栏应用，用来显示 **Claude Code 和
 - **任务完成**：回到静止的 VibeGo 图标，并可播放完成音效或显示完成弹窗。
 - **Claude + Codex 同时追踪**：同时读取两个 agent 的 hook 状态文件，必要时把多个活跃会话合并到同一个菜单栏读数。
 - **会话菜单**：展示最近的 Claude 和 Codex 会话，包括项目/标题与状态，会话较多时自动折叠溢出项。
-- **回到正确位置**：能打开应用内对话；终端会话会记录终端 bundle id 和 TTY，点击后尽量跳回对应的 Terminal 或 iTerm 标签页。
+- **回到正确位置**：点击会话可打开对应对话，或跳到它所在的终端标签页（Terminal、iTerm、Ghostty，或 VS Code / Cursor / Qoder 的集成终端面板）。详见[点击会话](#点击会话)。
 - **Codex 限额**：显示两列 5 格竖向限额条，左列是 5 小时窗口剩余额度，右列是 7 天窗口剩余额度。点击可查看计划、上下文、重置时间和更新详情。
 
 菜单里可以控制：
@@ -69,6 +69,24 @@ VibeGo 是一个轻量的 macOS 菜单栏应用，用来显示 **Claude Code 和
 | Claude Desktop 的 **Chat** 标签 | ❌ |
 | **Cowork** | ❌ |
 | Codex CLI / app hooks | ✅ |
+
+## 点击会话
+
+点击菜单里的任意会话，会跳回它所在的位置。具体打开什么，取决于会话运行在哪里：
+
+| 会话运行在 | 是否追踪 | 点击打开 |
+|---|---|---|
+| Claude Code / Codex CLI 在 **Terminal.app** | ✅ | 对应的 Terminal 标签页 |
+| Claude Code / Codex CLI 在 **iTerm2** | ✅ | 对应的 iTerm 标签页 |
+| Claude Code / Codex CLI 在 **Ghostty** | ✅ | 对应的 Ghostty 标签页 |
+| CLI 在 **VS Code / Cursor / Qoder** 集成终端 | ✅ | 对应的编辑器终端面板 ¹ |
+| CLI 在 **Warp / WezTerm / kitty / Alacritty** | ✅ | 终端 App（无法定位到具体标签页） |
+| Claude Code Desktop 的 **Code** 标签 | ✅ | Claude Desktop 里的对话 |
+| **Codex** App | ✅ | Codex 里的对话 |
+| Claude Desktop 的 **Chat** 标签 | ❌ | — |
+| **Cowork** | ❌ | — |
+
+¹ 需要在该编辑器中安装自带的 **VibeGo Bridge** 扩展。首次启动时会自动装进 VS Code、Cursor 和 Qoder。被遮挡或最小化的编辑器窗口也会被自动提到最前——首次会提示授予 VibeGo 辅助功能（Accessibility）权限。如果匹配不到终端标签页，点击会退而打开该会话的 transcript 文件。
 
 ## 系统要求
 
@@ -107,7 +125,7 @@ VibeGo 是一个轻量的 macOS 菜单栏应用，用来显示 **Claude Code 和
 
 应用本身是无状态的。Claude Code hooks 会把当前状态写入 `~/.claude/statusbar/state.json`，Codex hooks 会写入 `~/.codex/statusbar/state.json`。每个 agent 的 `sessions.d` 目录还保存按会话拆分的状态文件，所以菜单可以显示多个最近会话，而菜单栏本身保持简洁。应用每 0.4 秒轮询这些文件，并渲染当前活跃 agent，或合并显示 Claude + Codex 的状态。
 
-Codex 限额数据来自 `~/.codex/sessions/` 下最新的 `token_count` 事件，使用 300 分钟主窗口和 10080 分钟次窗口。CLI hooks 还会记录终端元数据，包括应用 bundle id 和 TTY，因此点击 CLI 会话时，能尽量跳回匹配的 Terminal 或 iTerm 标签页。
+Codex 限额数据来自 `~/.codex/sessions/` 下最新的 `token_count` 事件，使用 300 分钟主窗口和 10080 分钟次窗口。CLI hooks 还会记录终端元数据，包括应用 bundle id 和 TTY，因此点击 CLI 会话时，能尽量跳回 Terminal、iTerm、Ghostty 的对应标签页，或 VS Code / Cursor / Qoder 的对应终端面板（通过 VibeGo Bridge 扩展）。
 
 安装器会合并 hooks 到 `~/.claude/settings.json`（会先备份）。应用唯一的网络请求是每天一次检查 GitHub 最新 release，用于显示更新提示（见 [隐私说明](docs/privacy.md)）。
 

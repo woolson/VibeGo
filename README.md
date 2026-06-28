@@ -49,7 +49,7 @@ Built so you can tab away during a long run and still see, at a glance, whether 
 - **Task complete** — returns to the resting VibeGo icon, with optional completion sound and popup.
 - **Claude + Codex together** — tracks both agents from their hook state files and combines active sessions into one menu-bar readout when needed.
 - **Session menu** — shows recent Claude and Codex sessions, including project/title and status, with overflow when there are many sessions.
-- **Open the right place** — opens app conversations when available; for terminal sessions it can return to the matching Terminal/iTerm tab from the recorded TTY.
+- **Open the right place** — clicking a session opens its conversation, or jumps to the exact terminal tab it runs in (Terminal, iTerm, Ghostty, or a VS Code / Cursor / Qoder pane). See [Clicking a session](#clicking-a-session).
 - **Codex limits** — shows two vertical 5-block meters: the left column is the 5-hour window remaining, the right column is the 7-day window remaining. Click it for plan, context, reset, and update details.
 
 Everything is controlled from the menu:
@@ -69,6 +69,24 @@ Everything is controlled from the menu:
 | Claude Desktop — **Chat** tab | ❌ |
 | **Cowork** | ❌ |
 | Codex CLI / app hooks | ✅ |
+
+## Clicking a session
+
+Click any session in the menu to jump back to where it runs. What opens depends on where the session lives:
+
+| Session runs in | Tracked? | Click opens |
+|---|---|---|
+| Claude Code / Codex CLI in **Terminal.app** | ✅ | The exact Terminal tab |
+| Claude Code / Codex CLI in **iTerm2** | ✅ | The exact iTerm tab |
+| Claude Code / Codex CLI in **Ghostty** | ✅ | The exact Ghostty tab |
+| CLI in **VS Code / Cursor / Qoder** integrated terminal | ✅ | The exact editor pane ¹ |
+| CLI in **Warp / WezTerm / kitty / Alacritty** | ✅ | The terminal app (a specific tab isn't addressable) |
+| Claude Code Desktop — **Code** tab | ✅ | The conversation in Claude Desktop |
+| **Codex** app | ✅ | The conversation in Codex |
+| Claude Desktop — **Chat** tab | ❌ | — |
+| **Cowork** | ❌ | — |
+
+¹ Needs the bundled **VibeGo Bridge** extension in that editor. It's installed into VS Code, Cursor, and Qoder automatically on first launch. Covered or minimized editor windows are also raised to the front — grant VibeGo Accessibility once when prompted. If a terminal tab can't be matched, the click falls back to opening the session's transcript file.
 
 ## Requirements
 
@@ -107,7 +125,7 @@ The plugin installs the hooks but not the app itself, so drag **VibeGo** into Ap
 
 The app is stateless. Claude Code hooks write the current status to `~/.claude/statusbar/state.json`; Codex hooks write to `~/.codex/statusbar/state.json`. Per-session files live under each agent's `sessions.d` directory, so the menu can show multiple recent sessions while the menu bar stays compact. The app polls those files every 0.4s and renders the current active agent or a combined Claude + Codex readout.
 
-Codex rate-limit data is read from the latest `token_count` event under `~/.codex/sessions/`, using the 300-minute primary window and 10080-minute secondary window. CLI hooks also record terminal metadata, including app bundle id and TTY, so clicking a CLI session can jump back to the matching Terminal or iTerm tab when possible.
+Codex rate-limit data is read from the latest `token_count` event under `~/.codex/sessions/`, using the 300-minute primary window and 10080-minute secondary window. CLI hooks also record terminal metadata, including app bundle id and TTY, so clicking a CLI session can jump back to the matching tab in Terminal, iTerm, or Ghostty, or the matching pane in VS Code / Cursor / Qoder (via the VibeGo Bridge extension).
 
 The installer merges its hooks into `~/.claude/settings.json` (backing it up first), and the app's only network call is a once-a-day GitHub release check ([details](docs/privacy.md)).
 
