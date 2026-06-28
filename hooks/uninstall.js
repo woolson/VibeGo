@@ -52,3 +52,30 @@ if (fs.existsSync(codexSettingsPath)) {
   fs.writeFileSync(codexSettingsPath, JSON.stringify(codexSettings, null, 2) + "\n");
   console.log("Removed Codex status-bar hooks from", codexSettingsPath);
 }
+
+// --- Remove the VibeGo Bridge editor extension (CLI uninstall, then folder sweep) ---
+function whichCli(cmd) {
+  try { return cp.execFileSync("which", [cmd], { encoding: "utf8", timeout: 2000 }).trim() || ""; } catch { return ""; }
+}
+(function removeEditorBridge() {
+  for (const cmd of ["code", "cursor", "qoder"]) {
+    const bin = whichCli(cmd);
+    if (!bin) continue;
+    try {
+      cp.execFileSync(bin, ["--uninstall-extension", "vibego.bridge"], { stdio: "ignore", timeout: 15000 });
+      console.log("Uninstalled VibeGo Bridge via", cmd);
+    } catch {}
+  }
+  // Folder sweep for any installed via the folder fallback.
+  for (const extDir of [".vscode", ".vscode-insiders", ".cursor", ".qoder"].map((p) => path.join(home, p, "extensions"))) {
+    if (!fs.existsSync(extDir)) continue;
+    try {
+      for (const entry of fs.readdirSync(extDir)) {
+        if (entry.startsWith("vibego.bridge-")) {
+          fs.rmSync(path.join(extDir, entry), { recursive: true, force: true });
+          console.log("Removed", path.join(extDir, entry));
+        }
+      }
+    } catch {}
+  }
+})();

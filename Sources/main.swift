@@ -7,21 +7,21 @@ final class SessionRowView: NSView {
     private var tracking: NSTrackingArea?
     private var pressedInside = false
     private var hovering = false {
-        didSet { updateHover() }
+        didSet { updateAppearance() }
     }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerRadius = 6
-        updateHover()
+        updateAppearance()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         wantsLayer = true
         layer?.cornerRadius = 6
-        updateHover()
+        updateAppearance()
     }
 
     override func updateTrackingAreas() {
@@ -57,18 +57,31 @@ final class SessionRowView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         pressedInside = bounds.contains(convert(event.locationInWindow, from: nil))
+        updateAppearance()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // Cancel the press visually when the pointer is dragged out, and restore
+        // it when dragged back in — the same affordance a real button gives.
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        guard inside != pressedInside else { return }
+        pressedInside = inside
+        updateAppearance()
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { pressedInside = false }
-        guard pressedInside,
-              bounds.contains(convert(event.locationInWindow, from: nil)),
-              let action else { return }
+        let inside = pressedInside && bounds.contains(convert(event.locationInWindow, from: nil))
+        pressedInside = false
+        updateAppearance()
+        guard inside, let action else { return }
         NSApp.sendAction(action, to: target, from: self)
     }
 
-    private func updateHover() {
-        layer?.backgroundColor = hovering ? NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor : NSColor.clear.cgColor
+    private func updateAppearance() {
+        // Stronger accent tint while the mouse is held down (tactile "press"
+        // feedback), lighter on plain hover, transparent at rest.
+        let tint: CGFloat = pressedInside ? 0.24 : (hovering ? 0.12 : 0)
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(tint).cgColor
     }
 }
 
@@ -126,6 +139,12 @@ final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
     }
 }
 
+// A plain container whose origin sits at the top-left (flipped), used as the scroll document
+// view so the overflow session rows can be stacked top-to-bottom in natural reading order.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let statePath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.json")
@@ -141,6 +160,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     let claudeHistoryPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/history.jsonl")
     let claudeProjectsRoot = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
     let quitSuppressPath = (NSHomeDirectory() as NSString).appendingPathComponent(".vibego/quit-suppressed")
+    let editorBridgesDir = (NSHomeDirectory() as NSString).appendingPathComponent(".vibego/editor-bridges")
     let claudeDesktopBundleID = "com.anthropic.claudefordesktop"
     let codexBundleID = "com.openai.codex"
 
@@ -164,7 +184,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     var codexSessionTitles: [String: String] = [:]
     var sessionDetailsByTag: [Int: AgentStatus] = [:]
     var agentSourceByTag: [Int: String] = [:]
+    var overflowToggleTitleByTag: [Int: String] = [:]
     var nextSessionTag = 1
+    // Which agent sections currently show their "+n more sessions" overflow expanded inline.
+    // Reset on every menu open (see menuNeedsChange), so closing and reopening the popup
+    // always restores the collapsed "+n more sessions" state.
+    var expandedOverflowSections: Set<String> = []
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
@@ -257,7 +282,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         showDynamicStatusBackground ? max(fps, dynamicStatusBackgroundFPS) : fps
     }
     let activeStatusBarHorizontalPadding: CGFloat = 6
-    let activeStatusBarVerticalPadding: CGFloat = 2
+    let activeStatusBarVerticalPadding: CGFloat = 3
     struct LimitWindow {
         let usedPercent: Double
         let windowMinutes: Int
@@ -286,6 +311,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         var client: String = ""
         var terminalApp: String = ""
         var terminalBundleId: String = ""
+        var terminalSessionId: String = ""
         var tty: String = ""
         var isActive: Bool { state == "thinking" || state == "tool" || state == "permission" || state == "waiting" }
         var isAnimating: Bool { state == "thinking" || state == "tool" }
@@ -382,6 +408,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
     let releaseAPIURL = "https://api.github.com/repos/woolson/VibeGo/releases"
     let releasePageURL = "https://github.com/woolson/VibeGo/releases/latest"
+    let repoURL = "https://github.com/woolson/VibeGo"
     let releaseLineResetDate = "2026-06-27T00:00:00Z"
 
     // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
@@ -445,9 +472,16 @@ final class StatusController: NSObject, NSMenuDelegate {
         if let url = URL(string: cached ?? releasePageURL) { NSWorkspace.shared.open(url) }
     }
 
+    @objc func openGitHubRepo() {
+        if let url = URL(string: repoURL) { NSWorkspace.shared.open(url) }
+    }
+
     // MARK: menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Each open of the status bar popup starts with every section collapsed, so closing
+        // the popup and reopening it always restores the "+n more sessions" summary.
+        expandedOverflowSections.removeAll()
         menu.removeAllItems()
         checkForUpdate() // refreshes the update cache for next open (gated to once a day)
 
@@ -459,7 +493,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
+        let aboutItem = NSMenuItem(title: "About", action: nil, keyEquivalent: "")
+        aboutItem.submenu = aboutMenu()
+        menu.addItem(aboutItem)
         let d = UserDefaults.standard
         if d.bool(forKey: "latestVersionIsCurrentLine"),
            let latest = d.string(forKey: "latestVersion"),
@@ -468,7 +504,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             up.target = self
             menu.addItem(up)
         }
-        let q = NSMenuItem(title: "Quit vibego", action: #selector(quit), keyEquivalent: "q")
+        let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
     }
@@ -488,7 +524,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if #available(macOS 14.0, *) { soundItem.badge = NSMenuItemBadge(string: "1m+") }
         menu.addItem(soundItem)
 
-        let popupItem = NSMenuItem(title: "Show Completion Popup", action: #selector(togglePopup), keyEquivalent: "")
+        let popupItem = NSMenuItem(title: "Show Completion Prompt", action: #selector(togglePopup), keyEquivalent: "")
         popupItem.target = self
         popupItem.state = showCompletionPopup ? .on : .off
         menu.addItem(popupItem)
@@ -516,17 +552,40 @@ final class StatusController: NSObject, NSMenuDelegate {
         return menu
     }
 
+    func aboutMenu() -> NSMenu {
+        let menu = NSMenu()
+        let versionItem = NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+        menu.addItem(.separator())
+        let githubItem = NSMenuItem(title: "View on GitHub", action: #selector(openGitHubRepo), keyEquivalent: "")
+        githubItem.target = self
+        menu.addItem(githubItem)
+        return menu
+    }
+
     func usageOverviewItem() -> NSMenuItem {
         let item = NSMenuItem()
+        item.view = buildOverviewView()
+        return item
+    }
+
+    // Builds (or rebuilds) the overview view shown as the menu's first item. Re-runnable so
+    // toggling a section's overflow expansion can relayout the same item in place.
+    func buildOverviewView() -> NSView {
         sessionDetailsByTag.removeAll()
         agentSourceByTag.removeAll()
+        overflowToggleTitleByTag.removeAll()
         nextSessionTag = 1
         let claudeRows = displaySessions(claudeSessionStatuses, fallback: claudeEff)
         let codexRows = displaySessions(codexSessionStatuses, fallback: codexEff)
-        let claudeHeight = sectionHeight(rowCount: claudeRows.count)
-        let codexHeight = sectionHeight(rowCount: codexRows.count)
+        let claudeHeight = agentSectionHeight(title: "Claude", sessions: claudeRows)
+        let codexHeight = agentSectionHeight(title: "Codex", sessions: codexRows)
         let topPadding: CGFloat = 8
-        let bottomPadding: CGFloat = 1
+        // Space below the Codex section before the native menu separator. Paired with the ~1pt
+        // section bottom padding (see sectionHeight) so the Codex "+n more sessions" sits ~12pt
+        // above that divider, matching the Claude section's gap to the internal divider above it.
+        let bottomPadding: CGFloat = 5
         let sectionGap: CGFloat = 22
         let totalHeight = topPadding + claudeHeight + sectionGap + codexHeight + bottomPadding
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: totalHeight))
@@ -536,8 +595,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         addAgentSection(to: view, y: claudeY, height: claudeHeight, title: "Claude", quota: claudeQuota, sessions: claudeRows)
         addDivider(to: view, y: dividerY)
         addAgentSection(to: view, y: codexY, height: codexHeight, title: "Codex", quota: codexQuota, sessions: codexRows)
-        item.view = view
-        return item
+        return view
     }
 
     func addAgentSection(to parent: NSView, y: CGFloat, height: CGFloat, title: String, quota: RateLimitSnapshot?, sessions: [AgentStatus]) {
@@ -569,19 +627,44 @@ final class StatusController: NSObject, NSMenuDelegate {
             addSessionRow(to: parent, status: status, y: rowY)
             rowY -= 22
         }
-        if sessions.count > visibleSessionLimit {
-            parent.addSubview(menuLabel("+\(sessions.count - visibleSessionLimit) more sessions", x: 38, y: rowY - 4, width: width - 52, size: 11, color: .tertiaryLabelColor))
+        let overflowCount = sessions.count - visibleSessionLimit
+        guard overflowCount > 0 else { return }
+        if expandedOverflowSections.contains(title) {
+            // Expanded: replace the "+n more sessions" summary with a scrollable list of the
+            // remaining sessions. The view is anchored to the section's bottom edge (origin.y = y)
+            // so it always fits as the section grows taller — see agentSectionHeight.
+            let overflow = Array(sessions.dropFirst(visibleSessionLimit))
+            let scrollH = CGFloat(min(overflow.count, 10)) * 22
+            parent.addSubview(overflowScrollView(overflow: overflow, bottomY: y, height: scrollH))
+        } else {
+            // Collapsed: a clickable row that expands the section inline. Custom-view clicks
+            // keep the menu open, so the toggle can relayout the item without dismissing it.
+            let toggle = SessionRowView(frame: NSRect(x: 10, y: rowY - 3, width: 370, height: 22))
+            toggle.target = self
+            toggle.action = #selector(toggleOverflowExpansion(_:))
+            toggle.representedTag = nextSessionTag
+            overflowToggleTitleByTag[nextSessionTag] = title
+            nextSessionTag += 1
+            toggle.addSubview(menuLabel("+\(overflowCount) more sessions", x: 28, y: 2, width: width - 52, height: 18, size: 11, color: .tertiaryLabelColor, centerVertically: true))
+            parent.addSubview(toggle)
         }
     }
 
     func addSessionRow(to parent: NSView, status: AgentStatus, y: CGFloat) {
         let row = SessionRowView(frame: NSRect(x: 10, y: y - 3, width: 370, height: 22))
+        populateSessionRow(row, status: status)
+        parent.addSubview(row)
+    }
+
+    // Configures a session row view (tag registration + status dot + title/status labels) and
+    // wires its click to open that session's conversation. Shared by the inline rows and the
+    // overflow scroll list so both render identically.
+    func populateSessionRow(_ row: SessionRowView, status: AgentStatus) {
         row.target = self
         row.action = #selector(openSessionConversation(_:))
         row.representedTag = nextSessionTag
         sessionDetailsByTag[nextSessionTag] = status
         nextSessionTag += 1
-        parent.addSubview(row)
 
         let dotSize: CGFloat = 6
         let dot = NSView(frame: NSRect(x: 9, y: 8, width: dotSize, height: dotSize))
@@ -603,7 +686,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         row.addSubview(dot)
         row.addSubview(menuLabel(sessionTitle(status), x: 28, y: 2, width: 228, height: 18, size: 11, color: .labelColor, centerVertically: true))
         row.addSubview(menuLabel(statusText(status), x: 260, y: 2, width: 104, height: 18, size: 10, color: .secondaryLabelColor, alignRight: true, centerVertically: true))
-
     }
 
     @objc func openSessionConversation(_ sender: AnyObject) {
@@ -648,7 +730,68 @@ final class StatusController: NSObject, NSMenuDelegate {
     func sectionHeight(rowCount: Int) -> CGFloat {
         if rowCount == 0 { return 53 }
         let rows = rowCount > 3 ? 4 : max(1, rowCount)
-        return CGFloat(44 + rows * 22)
+        // Base 30 leaves ~1pt below the last row / "+n more sessions" toggle, so the toggle rests
+        // ~12pt above the divider beneath it (1pt padding + 11pt, half of sectionGap or bottomPadding).
+        return CGFloat(30 + rows * 22)
+    }
+
+    // Height of one agent section. When collapsed this matches sectionHeight (3 inline rows +
+    // a "+n more sessions" summary). When expanded it replaces that summary row with a scroll
+    // list of the overflow sessions, capped at 10 visible rows.
+    func agentSectionHeight(title: String, sessions: [AgentStatus]) -> CGFloat {
+        let overflow = max(0, sessions.count - 3)
+        if overflow > 0, expandedOverflowSections.contains(title) {
+            // 114pt covers the header + 3 inline rows on the 22pt grid; the scroll list anchors
+            // to the section's bottom edge so the section simply grows downward by its height.
+            return 114 + CGFloat(min(overflow, 10)) * 22
+        }
+        return sectionHeight(rowCount: sessions.count)
+    }
+
+    // A vertically-scrolling list of the overflow sessions, anchored at `bottomY` (the section's
+    // bottom edge) and `height` rows tall. Up to 10 rows are visible; the rest scroll. Rows are
+    // built with the same populateSessionRow used by the inline rows so they look and behave
+    // identically (click to open the conversation).
+    func overflowScrollView(overflow: [AgentStatus], bottomY: CGFloat, height: CGFloat) -> NSScrollView {
+        let contentWidth: CGFloat = 370
+        let docHeight = CGFloat(overflow.count) * 22
+        let doc = FlippedView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: docHeight))
+        doc.wantsLayer = true
+        var topY: CGFloat = 0
+        for status in overflow {
+            let row = SessionRowView(frame: NSRect(x: 0, y: topY, width: contentWidth, height: 22))
+            populateSessionRow(row, status: status)
+            doc.addSubview(row)
+            topY += 22
+        }
+        let scroll = NSScrollView(frame: NSRect(x: 10, y: bottomY, width: contentWidth, height: height))
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        scroll.documentView = doc
+        return scroll
+    }
+
+    @objc func toggleOverflowExpansion(_ sender: AnyObject) {
+        let tag = (sender as? SessionRowView)?.representedTag ?? (sender as? NSButton)?.tag ?? 0
+        guard let title = overflowToggleTitleByTag[tag] else { return }
+        if expandedOverflowSections.contains(title) {
+            expandedOverflowSections.remove(title)
+        } else {
+            expandedOverflowSections.insert(title)
+        }
+        rebuildOverviewLive()
+    }
+
+    // Rebuilds the overview item's view while the menu is open and reassigns it so AppKit
+    // reflows the menu to the new (taller/shorter) height. The expanded-state set persists
+    // across this rebuild; it is only cleared when the menu is next opened (menuNeedsUpdate).
+    func rebuildOverviewLive() {
+        guard let menu = statusItem.menu, let item = menu.item(at: 0) else { return }
+        item.view = buildOverviewView()
     }
 
     enum ResetStyle {
@@ -657,6 +800,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func quotaOverviewView(_ quota: RateLimitSnapshot?, x: CGFloat, y: CGFloat, width: CGFloat) -> NSView {
+        // No usage data (neither limit window resolved): hide the progress blade and countdown,
+        // showing only a placeholder. Keep the same height (14 + 2 + 7) so the header alignment
+        // is unchanged. If just one window resolved we still render normally below.
+        if quota == nil || (quota?.primary == nil && quota?.secondary == nil) {
+            let view = NSView(frame: NSRect(x: x, y: y, width: width, height: 23))
+            view.addSubview(menuLabel("(no data)", x: 0, y: 0, width: width, height: 23, size: 10, color: .tertiaryLabelColor, alignRight: true, centerVertically: true))
+            return view
+        }
         let textHeight: CGFloat = 14
         let textBarGap: CGFloat = 2
         let bladeHeight: CGFloat = 7
@@ -792,6 +943,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         return label
     }
 
+    func multilineLabel(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, bold: Bool = false, size: CGFloat = 11, color: NSColor? = nil, maximumLines: Int = 2) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.frame = NSRect(x: x, y: y, width: width, height: height)
+        label.font = bold ? NSFont.boldSystemFont(ofSize: size) : NSFont.systemFont(ofSize: size)
+        label.textColor = color ?? (bold ? NSColor.labelColor : NSColor.secondaryLabelColor)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = maximumLines
+        label.cell?.wraps = true
+        label.cell?.usesSingleLineMode = false
+        label.cell?.lineBreakMode = .byTruncatingTail
+        return label
+    }
+
     func sessionTitle(_ status: AgentStatus) -> String {
         let title = status.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty { return title }
@@ -862,7 +1026,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         let ws = NSWorkspace.shared
         if status.client.lowercased() == "cli" {
             if !status.isClosed, openTerminalSession(status) { return }
-            if status.source == "Claude", status.isClosed, openClaudeCLISession(status) { return }
             if openTerminalSession(status) { return }
             if let transcript = transcriptPath(for: status) {
                 ws.open(URL(fileURLWithPath: transcript))
@@ -880,24 +1043,112 @@ final class StatusController: NSObject, NSMenuDelegate {
         openAgentApp(status.source)
     }
 
-    func openClaudeCLISession(_ status: AgentStatus) -> Bool {
-        guard !status.sessionId.isEmpty else { return false }
-        let command = "claude --session \(shellQuoted(status.sessionId))"
-        let bundleID = status.terminalBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tty = status.tty.trimmingCharacters(in: .whitespacesAndNewlines)
-        if bundleID == "com.apple.Terminal" {
-            return runAppleScript(terminalRunScript(command: command, tty: tty))
+    // Editor-integrated terminals (VSCode / Cursor / Qoder) aren't AppleScript-addressable the way
+    // Terminal/iTerm tabs are. Each editor runs the VibeGo Bridge extension, which owns the only
+    // tty→terminal map and serves a localhost HTTP endpoint. We discover live bridges from files in
+    // editorBridgesDir and ask each to focus (or type into) the pane that owns `tty`.
+
+    func editorBridgeEndpoints() -> [(port: Int, token: String, file: String, app: String, proc: String)] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: editorBridgesDir) else { return [] }
+        var out: [(port: Int, token: String, file: String, app: String, proc: String)] = []
+        for file in files where file.hasSuffix(".json") {
+            let p = (editorBridgesDir as NSString).appendingPathComponent(file)
+            guard let data = fm.contents(atPath: p),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let token = obj["token"] as? String,
+                  let port = (obj["port"] as? Int) ?? ((obj["port"] as? NSNumber)?.intValue) else { continue }
+            if port > 0 {
+                out.append((port: port, token: token, file: p, app: (obj["app"] as? String) ?? "", proc: (obj["proc"] as? String) ?? ""))
+            }
         }
-        if bundleID == "com.googlecode.iterm2" {
-            return runAppleScript(iTermRunScript(command: command, tty: tty))
+        return out
+    }
+
+    // Restore a covered/minimized editor window via the Accessibility API. The bridge already raises
+    // its own window when it focuses the pane, but Electron editors don't expose AppleScript's
+    // minimization, so we toggle AXMinimized through System Events here too as a backup — whichever
+    // holds Accessibility permission (VibeGo or the editor) wins. System Events names a process by its
+    // EXECUTABLE (VSCode is "Code", not "Visual Studio Code"), so prefer the bridge's reported `proc`
+    // and only fall back to the display name (mapping the VSCode case). Needs the holder to have
+    // Accessibility access (one-time TCC prompt). Run off the main thread so a pending permission
+    // dialog never blocks the click.
+    func raiseEditor(appName: String, proc: String) {
+        var target = proc.isEmpty ? appName : proc
+        guard !target.isEmpty else { return }
+        if target == "Visual Studio Code" { target = "Code" }
+        let q = target.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "System Events"
+          set frontmost of process "\(q)" to true
+          try
+            set value of attribute "AXMinimized" of every window of process "\(q)" to false
+          end try
+        end tell
+        """
+        DispatchQueue.global().async { [weak self] in
+            let appleScript = NSAppleScript(source: script)
+            var error: NSDictionary?
+            appleScript?.executeAndReturnError(&error)
+            if let error { self?.dbg("raiseEditor AX err: \(error[NSAppleScript.errorNumber] ?? "?")") }
         }
-        return runAppleScript(terminalRunScript(command: command, tty: ""))
+    }
+
+    // Synchronous (mirrors runAppleScript's blocking style; openSessionConversation already pushes
+    // openConversation onto the main queue). Returns true once any live editor claims the tty.
+    func callEditorBridge(tty: String) -> Bool {
+        enum Outcome { case claimed, alive, dead }
+        let route = "/focus"
+        let body: [String: Any] = ["tty": tty]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return false }
+
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 0.6
+        cfg.timeoutIntervalForResource = 1.0
+        cfg.waitsForConnectivity = false
+        let session = URLSession(configuration: cfg)
+
+        for ep in editorBridgeEndpoints() {
+            guard let url = URL(string: "http://127.0.0.1:\(ep.port)\(route)") else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer " + ep.token, forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = payload
+
+            var outcome: Outcome = .alive
+            let sem = DispatchSemaphore(value: 0)
+            let task = session.dataTask(with: req) { _, response, error in
+                if let http = response as? HTTPURLResponse {
+                    outcome = (http.statusCode == 200) ? .claimed : .alive
+                } else {
+                    outcome = .dead // transport error (refused/timeout) → stale discovery file
+                }
+                sem.signal()
+            }
+            task.resume()
+            if sem.wait(timeout: .now() + 0.8) == .timedOut { task.cancel() }
+            switch outcome {
+            case .claimed:
+                dbg("editor bridge port=\(ep.port) focused tty=\(tty)")
+                raiseEditor(appName: ep.app, proc: ep.proc)
+                return true
+            case .dead:
+                try? FileManager.default.removeItem(atPath: ep.file) // prune stale bridge
+            case .alive:
+                break // bridge up but doesn't own this tty → try the next editor
+            }
+        }
+        return false
     }
 
     func openTerminalSession(_ status: AgentStatus) -> Bool {
         let bundleID = status.terminalBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
         let tty = status.tty.trimmingCharacters(in: .whitespacesAndNewlines)
         dbg("openTerminalSession bundleID=\(bundleID) tty=\(tty)")
+        // Editor terminals (VSCode/Cursor/Qoder) carry no bundleId — ask the bridge to focus the
+        // matching pane before falling through. No overhead for Terminal/iTerm (their bundleId is set).
+        if bundleID.isEmpty, !tty.isEmpty, callEditorBridge(tty: tty) { return true }
         if !tty.isEmpty {
             if bundleID == "com.apple.Terminal" {
                 let ok = runAppleScript(terminalSelectScript(tty: tty))
@@ -905,6 +1156,11 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if ok { return true }
             }
             if bundleID == "com.googlecode.iterm2", runAppleScript(iTermSelectScript(tty: tty)) { return true }
+        }
+        if bundleID == "com.mitchellh.ghostty",
+           !status.terminalSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           runAppleScript(ghosttySelectScript(terminalId: status.terminalSessionId)) {
+            return true
         }
         dbg("falling back to plain openApplication")
         guard !bundleID.isEmpty,
@@ -973,6 +1229,22 @@ final class StatusController: NSObject, NSMenuDelegate {
         """
     }
 
+    func ghosttyRunScript(command: String) -> String {
+        let escapedCommand = appleScriptString(command)
+        return """
+        tell application id "com.mitchellh.ghostty"
+          activate
+          set cfg to new surface configuration from {command:\(escapedCommand), wait after command:true}
+          if (count of windows) is 0 then
+            new window with configuration cfg
+          else
+            new tab in front window with configuration cfg
+          end if
+        end tell
+        return true
+        """
+    }
+
     func terminalSelectScript(tty: String) -> String {
         let escapedTTY = appleScriptString(tty)
         return """
@@ -1009,6 +1281,28 @@ final class StatusController: NSObject, NSMenuDelegate {
                     select s
                     select t
                     set index of w to 1
+                    return true
+                  end if
+                end try
+              end repeat
+            end repeat
+          end repeat
+        end tell
+        return false
+        """
+    }
+
+    func ghosttySelectScript(terminalId: String) -> String {
+        let escapedTerminalId = appleScriptString(terminalId.trimmingCharacters(in: .whitespacesAndNewlines))
+        return """
+        tell application id "com.mitchellh.ghostty"
+          activate
+          repeat with w in windows
+            repeat with tb in tabs of w
+              repeat with trm in terminals of tb
+                try
+                  if (id of trm as string) is equal to \(escapedTerminalId) then
+                    focus trm
                     return true
                   end if
                 end try
@@ -1073,7 +1367,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "VibeGo needs permission to control Terminal"
-            alert.informativeText = "Allow VibeGo under System Settings > Privacy & Security > Automation so it can select the exact Terminal or iTerm tab for CLI sessions."
+            alert.informativeText = "Allow VibeGo under System Settings > Privacy & Security > Automation so it can select the exact Terminal, iTerm, or Ghostty tab for CLI sessions."
             alert.addButton(withTitle: "Open Settings")
             alert.addButton(withTitle: "OK")
             let response = alert.runModal()
@@ -1157,6 +1451,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     @objc func togglePopup() {
         showCompletionPopup.toggle()
         UserDefaults.standard.set(showCompletionPopup, forKey: "completionPopup")
+        if !showCompletionPopup {
+            dismissCompletionPopover(animated: true)
+        }
     }
 
     @objc func chooseColor(_ sender: NSMenuItem) {
@@ -1413,11 +1710,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         content.addSubview(iconView)
 
-        // The session title is the popover's single line of text (the app icon already conveys
-        // the source). Vertically centered and given the full content width.
+        // The app icon conveys the source; the right-side copy gets up to two lines before
+        // truncating. A single-line title is drawn in a vertically-centered cell (its own line
+        // height is much shorter than the body), so it sits mid-row instead of pinned to the top.
         let title = status.title.isEmpty ? status.source : status.title
-        let titleHeight: CGFloat = 18
-        content.addSubview(menuLabel(title, x: 52, y: floor((bodyHeight - titleHeight) / 2), width: width - 64, height: titleHeight, bold: true, size: 13, color: .labelColor, centerVertically: true))
+        let titleWidth = width - 64
+        let titleFont = NSFont.boldSystemFont(ofSize: 13)
+        let isSingleLine = (title as NSString).size(withAttributes: [.font: titleFont]).width <= titleWidth
+        if isSingleLine {
+            content.addSubview(menuLabel(title, x: 52, y: 0, width: titleWidth, height: bodyHeight, bold: true, size: 13, color: .labelColor, centerVertically: true))
+        } else {
+            let titleHeight: CGFloat = 34
+            content.addSubview(multilineLabel(title, x: 52, y: floor((bodyHeight - titleHeight) / 2), width: titleWidth, height: titleHeight, bold: true, size: 13, color: .labelColor, maximumLines: 2))
+        }
 
         let vc = NSViewController()
         if #available(macOS 26.0, *) {
@@ -1519,6 +1824,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let client = current["client"] as? String ?? ""
         let terminalApp = current["terminalApp"] as? String ?? ""
         let terminalBundleId = current["terminalBundleId"] as? String ?? ""
+        let terminalSessionId = current["terminalSessionId"] as? String ?? ""
         let tty = current["tty"] as? String ?? ""
         let age = Date().timeIntervalSince1970 - ts
 
@@ -1550,7 +1856,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if title.isEmpty, source == "Claude" {
             title = titleFromClaudeTranscript(transcript)
         }
-        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, closedAt: closedAt, transcript: transcript, client: client, terminalApp: terminalApp, terminalBundleId: terminalBundleId, tty: tty)
+        return AgentStatus(source: source, state: state, label: label, project: project, tool: tool, sessionId: sessionId, title: title, startedAt: started, ts: ts, closedAt: closedAt, transcript: transcript, client: client, terminalApp: terminalApp, terminalBundleId: terminalBundleId, terminalSessionId: terminalSessionId, tty: tty)
     }
 
     func readSessionStatuses(in dir: String, source: String) -> [AgentStatus] {

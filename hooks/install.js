@@ -123,3 +123,63 @@ fs.writeFileSync(codexSettingsPath, JSON.stringify(codexSettings, null, 2) + "\n
 console.log("Installed Codex status-bar hooks into", codexSettingsPath);
 console.log("Codex scripts:", codexUpdateDest, "and", codexLifecycleDest);
 console.log("Codex backup (first run only):", codexSettingsPath + ".bak-statusbar");
+
+// --- VibeGo Bridge editor extension (VSCode / Cursor / Qoder) ---
+// Install the bundled .vsix so VibeGo can focus the exact integrated terminal a CLI session runs
+// in. VSCode-fork editors manage their extensions dir and garbage-collect folders they didn't
+// install themselves, so install through each editor's own CLI (`--install-extension` registers
+// the extension in the editor's DB and survives later scans). Fall back to a raw folder copy for
+// editors whose CLI isn't on PATH.
+function whichCli(cmd) {
+  try {
+    return cp.execFileSync("which", [cmd], { encoding: "utf8", timeout: 2000 }).trim() || "";
+  } catch { return ""; }
+}
+
+function installEditorBridge() {
+  const vsix = path.join(__dirname, "editor-bridge.vsix");
+  const folderSrc = path.join(__dirname, "editor-bridge");
+  if (!fs.existsSync(vsix)) {
+    console.log("editor-bridge.vsix not bundled; skipping editor extension.");
+    return;
+  }
+  let version = "0.0.0";
+  try {
+    version = JSON.parse(fs.readFileSync(path.join(folderSrc, "package.json"), "utf8")).version || version;
+  } catch {}
+  const editors = [
+    { cli: "code", dir: path.join(home, ".vscode", "extensions") },
+    { cli: "cursor", dir: path.join(home, ".cursor", "extensions") },
+    { cli: "qoder", dir: path.join(home, ".qoder", "extensions") },
+  ];
+  for (const e of editors) {
+    const bin = whichCli(e.cli);
+    if (bin) {
+      try {
+        cp.execFileSync(bin, ["--install-extension", vsix, "--force"], { stdio: "ignore", timeout: 30000 });
+        console.log("Installed VibeGo Bridge via", e.cli);
+        continue;
+      } catch (err) {
+        console.log(e.cli, "CLI install failed:", err.message, "— trying folder copy");
+      }
+    }
+    // Fallback: direct folder copy (editors without the CLI on PATH; may be GC'd on a later scan).
+    if (fs.existsSync(e.dir) && fs.existsSync(folderSrc)) {
+      try {
+        for (const entry of fs.readdirSync(e.dir)) {
+          // Clean any prior install, including the "vibogo" typo from older builds.
+          if (entry.startsWith("vibego.bridge-") || entry.startsWith("vibogo.bridge-")) {
+            fs.rmSync(path.join(e.dir, entry), { recursive: true, force: true });
+          }
+        }
+        cp.execFileSync("cp", ["-R", folderSrc, path.join(e.dir, "vibego.bridge-" + version)]);
+        console.log("Installed VibeGo Bridge (folder fallback) into", e.dir);
+      } catch (err2) {
+        console.log("Skipped", e.cli, ":", err2.message);
+      }
+    } else if (!bin) {
+      console.log("Skipped", e.cli, "(no CLI on PATH and no extensions dir)");
+    }
+  }
+}
+installEditorBridge();

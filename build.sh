@@ -28,13 +28,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>VibeGo</string>
   <key>CFBundleIdentifier</key><string>com.local.vibego</string>
   <key>CFBundleExecutable</key><string>VibeGo</string>
-  <key>CFBundleVersion</key><string>0.1.1</string>
-  <key>CFBundleShortVersionString</key><string>0.1.1</string>
+  <key>CFBundleVersion</key><string>0.1.7</string>
+  <key>CFBundleShortVersionString</key><string>0.1.7</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>NSAppleEventsUsageDescription</key><string>VibeGo uses Apple Events to switch back to the Terminal or iTerm tab that owns a Claude Code or Codex CLI session.</string>
+  <key>NSAppleEventsUsageDescription</key><string>VibeGo uses Apple Events to switch back to the Terminal, iTerm, or Ghostty tab that owns a Claude Code or Codex CLI session.</string>
 </dict>
 </plist>
 PLIST
@@ -44,6 +44,15 @@ mkdir -p "$APP/Contents/Resources"
 cp hooks/update.js hooks/lifecycle.js hooks/codex-update.js hooks/codex-lifecycle.js hooks/statusline-proxy.js hooks/install.js hooks/uninstall.js "$APP/Contents/Resources/"
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
+# Package the companion editor extension to a .vsix. VSCode-fork editors only honor extensions
+# installed through their own CLI (a raw folder copy gets garbage-collected on the next scan), so
+# install.js runs `code/cursor --install-extension` against this .vsix.
+echo "Packaging editor extension…"
+rm -f editor-bridge/*.vsix
+( cd editor-bridge && npx --yes @vscode/vsce@latest package --no-git-tag-version --allow-missing-repository -o editor-bridge.vsix >/dev/null 2>&1 ) || echo "  (vsce packaging failed — editor bridge won't be bundled)"
+cp editor-bridge/editor-bridge.vsix "$APP/Contents/Resources/editor-bridge.vsix" 2>/dev/null || true
+# Keep the source folder too — install.js reads its package.json for the folder-copy fallback.
+cp -R editor-bridge "$APP/Contents/Resources/editor-bridge"
 
 # --- Signing / notarization ---
 # For a clean (no Gatekeeper warning) release you need, set up once on this Mac:

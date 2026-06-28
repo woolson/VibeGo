@@ -64,9 +64,16 @@ function terminalMetadata() {
   } else if (lowerTerm.includes("alacritty")) {
     terminalApp = "Alacritty";
     terminalBundleId = "org.alacritty";
+  } else if (lowerTerm.includes("vscode") || lowerTerm.includes("cursor") || lowerTerm.includes("qoder")) {
+    // Editor-integrated terminal. No dedicated bundle id — VibeGo routes these to the editor bridge
+    // instead of AppleScript, so leave terminalBundleId empty.
+    terminalApp = "vscode";
+    terminalBundleId = "";
   }
 
-  if (!terminalBundleId) {
+  // Only infer from the process tree when TERM_PROGRAM was absent. Walking the full ancestor chain
+  // would misclassify an editor launched from Terminal (its ancestors include Terminal.app).
+  if (!terminalApp && !terminalBundleId) {
     const chain = processChain();
     const joined = chain.join("\n");
     if (joined.includes("terminal.app")) { terminalApp = "Terminal"; terminalBundleId = "com.apple.Terminal"; }
@@ -78,7 +85,23 @@ function terminalMetadata() {
     else if (joined.includes("alacritty")) { terminalApp = "Alacritty"; terminalBundleId = "org.alacritty"; }
   }
 
-  return { terminalApp, terminalBundleId, tty };
+  const terminalSessionId = terminalBundleId === "com.mitchellh.ghostty" ? ghosttyTerminalId() : "";
+  return { terminalApp, terminalBundleId, terminalSessionId, tty };
+}
+
+function ghosttyTerminalId() {
+  try {
+    return require("child_process")
+      .execFileSync("osascript", [
+        "-e", "tell application id \"com.mitchellh.ghostty\"",
+        "-e", "if (count of windows) is 0 then return \"\"",
+        "-e", "return id of focused terminal of selected tab of front window as string",
+        "-e", "end tell",
+      ], { encoding: "utf8", timeout: 500, stdio: ["ignore", "pipe", "ignore"] })
+      .trim();
+  } catch {
+    return "";
+  }
 }
 
 function ttyOfPid(pid) {
@@ -201,7 +224,10 @@ function run() {
     transcript: p.transcript_path || p.transcript || prev.transcript || "",
     client,
     terminalApp: terminal.terminalApp || prev.terminalApp || "",
-    terminalBundleId: terminal.terminalBundleId || prev.terminalBundleId || "",
+    // terminalBundleId is intentionally empty for editor terminals (signals "use the bridge"), so
+    // only fall back to prev when terminalMetadata made no determination (terminalApp empty).
+    terminalBundleId: terminal.terminalApp ? terminal.terminalBundleId : (prev.terminalBundleId || ""),
+    terminalSessionId: terminal.terminalSessionId || prev.terminalSessionId || "",
     tty: terminal.tty || prev.tty || "",
     startedAt,
     ts,
