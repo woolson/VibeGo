@@ -211,11 +211,13 @@ final class StatusController: NSObject, NSMenuDelegate {
     enum DynamicBackgroundStyle: String, CaseIterable {
         case liquid
         case breathing
+        case pixelFlow
 
         var title: String {
             switch self {
             case .liquid: return "Liquid"
             case .breathing: return "Breathing"
+            case .pixelFlow: return "Pixel Flow"
             }
         }
 
@@ -225,12 +227,15 @@ final class StatusController: NSObject, NSMenuDelegate {
             switch persistedValue {
             case "liquid": self = .liquid
             case "breathing", "pulse": self = .breathing
+            case "pixelFlow": self = .pixelFlow
             default: return nil
             }
         }
     }
     var animStyle: AnimStyle = .web
     var showTimer = false
+    var showClaudeAgent = true
+    var showCodexAgent = true
     var showDynamicStatusBackground = true
     var dynamicBackgroundStyle: DynamicBackgroundStyle = .liquid
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
@@ -323,6 +328,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
+        if d.object(forKey: "showClaudeAgent") != nil { showClaudeAgent = d.bool(forKey: "showClaudeAgent") }
+        if d.object(forKey: "showCodexAgent") != nil { showCodexAgent = d.bool(forKey: "showCodexAgent") }
+        enforceAtLeastOneVisibleAgent()
         if d.object(forKey: "dynamicStatusBackground") != nil { showDynamicStatusBackground = d.bool(forKey: "dynamicStatusBackground") }
         if let s = d.string(forKey: "dynamicBackgroundStyle"), let st = DynamicBackgroundStyle(persistedValue: s) { dynamicBackgroundStyle = st }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
@@ -512,6 +520,20 @@ final class StatusController: NSObject, NSMenuDelegate {
     func settingsMenu() -> NSMenu {
         let menu = NSMenu()
 
+        menu.addItem(header("Agent Sections"))
+        let claudeItem = NSMenuItem(title: "Show Claude", action: #selector(toggleClaudeAgent), keyEquivalent: "")
+        claudeItem.target = self
+        claudeItem.state = showClaudeAgent ? .on : .off
+        claudeItem.isEnabled = !showClaudeAgent || showCodexAgent
+        menu.addItem(claudeItem)
+
+        let codexItem = NSMenuItem(title: "Show Codex", action: #selector(toggleCodexAgent), keyEquivalent: "")
+        codexItem.target = self
+        codexItem.state = showCodexAgent ? .on : .off
+        codexItem.isEnabled = !showCodexAgent || showClaudeAgent
+        menu.addItem(codexItem)
+
+        menu.addItem(.separator())
         menu.addItem(header("Function Controls"))
         let timerItem = NSMenuItem(title: "Show timer", action: #selector(toggleTimer), keyEquivalent: "")
         timerItem.target = self
@@ -577,25 +599,43 @@ final class StatusController: NSObject, NSMenuDelegate {
         agentSourceByTag.removeAll()
         overflowToggleTitleByTag.removeAll()
         nextSessionTag = 1
-        let claudeRows = displaySessions(claudeSessionStatuses, fallback: claudeEff)
-        let codexRows = displaySessions(codexSessionStatuses, fallback: codexEff)
-        let claudeHeight = agentSectionHeight(title: "Claude", sessions: claudeRows)
-        let codexHeight = agentSectionHeight(title: "Codex", sessions: codexRows)
+        let sections = visibleOverviewSections()
+        let sectionHeights = sections.map { agentSectionHeight(title: $0.title, sessions: $0.sessions) }
         let topPadding: CGFloat = 8
         // Space below the Codex section before the native menu separator. Paired with the ~1pt
         // section bottom padding (see sectionHeight) so the Codex "+n more sessions" sits ~12pt
         // above that divider, matching the Claude section's gap to the internal divider above it.
         let bottomPadding: CGFloat = 5
         let sectionGap: CGFloat = 22
-        let totalHeight = topPadding + claudeHeight + sectionGap + codexHeight + bottomPadding
+        let totalHeight = topPadding
+            + sectionHeights.reduce(CGFloat(0), +)
+            + CGFloat(max(0, sections.count - 1)) * sectionGap
+            + bottomPadding
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: totalHeight))
-        let codexY = bottomPadding
-        let dividerY = codexY + codexHeight + (sectionGap / 2)
-        let claudeY = codexY + codexHeight + sectionGap
-        addAgentSection(to: view, y: claudeY, height: claudeHeight, title: "Claude", quota: claudeQuota, sessions: claudeRows)
-        addDivider(to: view, y: dividerY)
-        addAgentSection(to: view, y: codexY, height: codexHeight, title: "Codex", quota: codexQuota, sessions: codexRows)
+        var currentTop = totalHeight - topPadding
+        for index in sections.indices {
+            let section = sections[index]
+            let height = sectionHeights[index]
+            let y = currentTop - height
+            addAgentSection(to: view, y: y, height: height, title: section.title, quota: section.quota, sessions: section.sessions)
+            currentTop = y
+            if index < sections.count - 1 {
+                addDivider(to: view, y: currentTop - (sectionGap / 2))
+                currentTop -= sectionGap
+            }
+        }
         return view
+    }
+
+    func visibleOverviewSections() -> [(title: String, quota: RateLimitSnapshot?, sessions: [AgentStatus])] {
+        var sections: [(title: String, quota: RateLimitSnapshot?, sessions: [AgentStatus])] = []
+        if showClaudeAgent {
+            sections.append(("Claude", claudeQuota, displaySessions(claudeSessionStatuses, fallback: claudeEff)))
+        }
+        if showCodexAgent {
+            sections.append(("Codex", codexQuota, displaySessions(codexSessionStatuses, fallback: codexEff)))
+        }
+        return sections
     }
 
     func addAgentSection(to parent: NSView, y: CGFloat, height: CGFloat, title: String, quota: RateLimitSnapshot?, sessions: [AgentStatus]) {
@@ -1421,6 +1461,71 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    func enforceAtLeastOneVisibleAgent() {
+        guard !showClaudeAgent && !showCodexAgent else { return }
+        showClaudeAgent = true
+        showCodexAgent = true
+        persistAgentVisibility()
+    }
+
+    func persistAgentVisibility() {
+        let d = UserDefaults.standard
+        d.set(showClaudeAgent, forKey: "showClaudeAgent")
+        d.set(showCodexAgent, forKey: "showCodexAgent")
+    }
+
+    func isAgentVisible(_ source: String) -> Bool {
+        source == "Codex" ? showCodexAgent : showClaudeAgent
+    }
+
+    func visibleEffectiveStatuses() -> [AgentStatus] {
+        var statuses: [AgentStatus] = []
+        if showClaudeAgent { statuses.append(claudeEff) }
+        if showCodexAgent { statuses.append(codexEff) }
+        return statuses
+    }
+
+    func visibleAggregateStatuses() -> [AgentStatus] {
+        var statuses: [AgentStatus] = []
+        if showClaudeAgent {
+            statuses.append(aggregateStatus(for: "Claude", sessions: claudeSessionStatuses, fallback: claudeEff))
+        }
+        if showCodexAgent {
+            statuses.append(aggregateStatus(for: "Codex", sessions: codexSessionStatuses, fallback: codexEff))
+        }
+        return statuses
+    }
+
+    func agentVisibilityDidChange() {
+        persistAgentVisibility()
+        expandedOverflowSections = Set(expandedOverflowSections.filter { isAgentVisible($0) })
+        if let status = completionPopoverStatus, !isAgentVisible(status.source) {
+            dismissCompletionPopover(animated: true)
+        }
+        evaluate()
+        rebuildOverviewLive()
+    }
+
+    @objc func toggleClaudeAgent() {
+        let next = !showClaudeAgent
+        guard next || showCodexAgent else {
+            NSSound.beep()
+            return
+        }
+        showClaudeAgent = next
+        agentVisibilityDidChange()
+    }
+
+    @objc func toggleCodexAgent() {
+        let next = !showCodexAgent
+        guard next || showClaudeAgent else {
+            NSSound.beep()
+            return
+        }
+        showCodexAgent = next
+        agentVisibilityDidChange()
+    }
+
     @objc func toggleTimer() {
         showTimer.toggle()
         UserDefaults.standard.set(showTimer, forKey: "showTimer")
@@ -1515,8 +1620,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         codexEff = effectiveStatus(from: codexCurrent, source: "Codex")
 
         // Chime once when a turn that ran >= 1 min transitions to "done".
-        let combinedEff = [claudeEff, codexEff].map(\.state).joined(separator: "+")
-        let activeStarted = [claudeEff, codexEff].filter { $0.isAnimating && $0.startedAt > 0 }.map(\.startedAt).min() ?? 0
+        let visibleEffs = visibleEffectiveStatuses()
+        let combinedEff = visibleEffs.map(\.state).joined(separator: "+")
+        let activeStarted = visibleEffs.filter { $0.isAnimating && $0.startedAt > 0 }.map(\.startedAt).min() ?? 0
         if activeStarted > 0 { lastTurnStart = activeStarted }
         if combinedEff.contains("done"), !prevEff.contains("done"), playCompletionSound,
            lastTurnStart > 0, Date().timeIntervalSince1970 - lastTurnStart >= 60 {
@@ -1524,13 +1630,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         // Per-agent done transition drives the completion popup (fires on every finish,
         // unlike the sound which gates on a 1-minute turn).
-        let claudeJustDone = didObserveCompletionStates && claudeEff.state == "done" && prevClaudeState != "done"
-        let codexJustDone = didObserveCompletionStates && codexEff.state == "done" && prevCodexState != "done"
+        let claudeJustDone = showClaudeAgent && didObserveCompletionStates && claudeEff.state == "done" && prevClaudeState != "done"
+        let codexJustDone = showCodexAgent && didObserveCompletionStates && codexEff.state == "done" && prevCodexState != "done"
         prevClaudeState = claudeEff.state
         prevCodexState = codexEff.state
         didObserveCompletionStates = true
 
-        if !claudeEff.isAnimating && !codexEff.isAnimating { lastTurnStart = 0 }
+        if !visibleEffs.contains(where: { $0.isAnimating }) { lastTurnStart = 0 }
         prevEff = combinedEff
 
         renderAgents()
@@ -1988,8 +2094,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func renderAgents() {
-        let active = [aggregateStatus(for: "Claude", sessions: claudeSessionStatuses, fallback: claudeEff),
-                      aggregateStatus(for: "Codex", sessions: codexSessionStatuses, fallback: codexEff)]
+        let active = visibleAggregateStatuses()
             .filter(\.isActive)
         let animate = active.contains { $0.isAnimating }
         activeBase = combinedStatusBarLabel(active)
@@ -2154,8 +2259,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func animStep() {
         frameIdx = (frameIdx + 1) % frameCount
-        let active = [aggregateStatus(for: "Claude", sessions: claudeSessionStatuses, fallback: claudeEff),
-                      aggregateStatus(for: "Codex", sessions: codexSessionStatuses, fallback: codexEff)]
+        let active = visibleAggregateStatuses()
             .filter(\.isActive)
         renderStatusItems(active)
     }
@@ -2571,6 +2675,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             drawLiquidStatusBarBackground(in: rect)
         case .breathing:
             drawBreathingStatusBarBackground(in: rect)
+        case .pixelFlow:
+            drawPixelFlowStatusBarBackground(in: rect)
         }
     }
 
@@ -2606,6 +2712,93 @@ final class StatusController: NSObject, NSMenuDelegate {
         NSGraphicsContext.restoreGraphicsState()
 
         NSColor.separatorColor.withAlphaComponent(0.28).setStroke()
+        path.lineWidth = 0.7
+        path.stroke()
+    }
+
+    static func unitNoise(_ value: Double) -> CGFloat {
+        let raw = sin(value * 12.9898) * 43758.5453123
+        return CGFloat(raw - floor(raw))
+    }
+
+    func drawPixelFlowStatusBarBackground(in rect: NSRect) {
+        let elapsed = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: dynamicStatusBackgroundCycle)
+        let phase = CGFloat(elapsed / dynamicStatusBackgroundCycle)
+        let capsule = rect.insetBy(dx: 0.5, dy: 1)
+        let path = NSBezierPath(roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+
+        NSColor.controlBackgroundColor.withAlphaComponent(0.58).setFill()
+        capsule.fill()
+
+        let baseLeft = NSColor(srgbRed: 0.72, green: 0.72, blue: 0.74, alpha: 0.40)
+        let baseMid = NSColor(srgbRed: 0.70, green: 0.62, blue: 0.86, alpha: 0.30)
+        let baseRight = NSColor(srgbRed: 0.65, green: 0.35, blue: 0.92, alpha: 0.45)
+        if let grad = NSGradient(colors: [baseLeft, baseMid, baseRight], atLocations: [0, 0.55, 1], colorSpace: .sRGB) {
+            grad.draw(in: capsule, angle: 0)
+        }
+
+        let rightDim = NSColor.clear
+        let rightGlow = NSColor(srgbRed: 0.82, green: 0.58, blue: 1.00, alpha: 0.24)
+        if let glow = NSGradient(colors: [rightDim, rightGlow], atLocations: [0.18, 1], colorSpace: .sRGB) {
+            glow.draw(in: capsule, angle: 0)
+        }
+
+        let pitch: CGFloat = 5.0
+        let pixelSize: CGFloat = 2.35
+        let rowInset: CGFloat = 4.2
+        let flowOffset = phase * pitch * 2
+        let tick = Int(floor(phase * 28))
+        let minCol = -2
+        let maxCol = Int(ceil(capsule.width / pitch)) + 3
+        let rowCount = max(1, Int(floor((capsule.height - rowInset * 2) / pitch)) + 1)
+
+        for row in 0..<rowCount {
+            let y = capsule.minY + rowInset + CGFloat(row) * pitch
+            guard y + pixelSize <= capsule.maxY - 2 else { continue }
+            let rowStagger = row.isMultiple(of: 2) ? CGFloat(0) : pitch * 0.46
+
+            for col in minCol...maxCol {
+                let x = capsule.minX + CGFloat(col) * pitch + rowStagger + flowOffset.truncatingRemainder(dividingBy: pitch * 2) - pitch * 2
+                guard x + pixelSize >= capsule.minX, x <= capsule.maxX else { continue }
+
+                let normalizedX = min(1, max(0, (x - capsule.minX) / max(capsule.width, 1)))
+                var wave = normalizedX - phase
+                wave -= floor(wave)
+                let stream = max(0, 1 - abs(wave - 0.16) / 0.16)
+                let rightLift = pow(normalizedX, 1.45)
+                let flicker = StatusController.unitNoise(Double(col * 83 + row * 197 + tick * 47))
+                let blink = flicker > 0.78 ? CGFloat(0.16) : (flicker < 0.14 ? CGFloat(-0.04) : CGFloat(0))
+                let alpha = min(0.48, max(0.03, 0.05 + rightLift * 0.22 + stream * 0.18 + blink))
+                let color = StatusController.lerpColor(
+                    NSColor(srgbRed: 0.86, green: 0.82, blue: 0.98, alpha: alpha),
+                    NSColor(srgbRed: 0.98, green: 0.94, blue: 1.00, alpha: alpha + 0.05),
+                    stream
+                )
+                color.setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: y, width: pixelSize, height: pixelSize), xRadius: 0.7, yRadius: 0.7).fill()
+            }
+        }
+
+        let scanWidth = max(16, capsule.width * 0.22)
+        let scanX = capsule.minX - scanWidth + phase * (capsule.width + scanWidth * 1.6)
+        if let scan = NSGradient(
+            colors: [
+                NSColor.clear,
+                NSColor.white.withAlphaComponent(0.22),
+                NSColor(srgbRed: 0.86, green: 0.66, blue: 1.00, alpha: 0.16),
+                NSColor.clear,
+            ],
+            atLocations: [0, 0.42, 0.56, 1],
+            colorSpace: .sRGB
+        ) {
+            scan.draw(in: NSRect(x: scanX, y: capsule.minY, width: scanWidth, height: capsule.height), angle: 0)
+        }
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.separatorColor.withAlphaComponent(0.26).setStroke()
         path.lineWidth = 0.7
         path.stroke()
     }

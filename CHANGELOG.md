@@ -2,6 +2,12 @@
 
 All notable changes to VibeGo are documented here.
 
+## [0.1.8] - 2026-06-28
+
+### Added
+- Settings can now hide the Claude or Codex section from the menu bar and session overview, while keeping at least one agent visible.
+- Added a new **Pixel Flow** dynamic status background style.
+
 ## [0.1.7] - 2026-06-28
 
 ### Added
