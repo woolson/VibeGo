@@ -1,4 +1,5 @@
 import Cocoa
+import Sparkle
 
 final class SessionRowView: NSView {
     weak var target: AnyObject?
@@ -147,6 +148,11 @@ final class FlippedView: NSView {
 
 final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private lazy var sparkleUpdaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
     let statePath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.json")
     let claudeStatesDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/states.d")
     let claudeLimitsPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/limits.json")
@@ -345,7 +351,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         pollTimer = t
         tick()
         ensureHooksInstalled()
-        checkForUpdate()
+        _ = sparkleUpdaterController   // start Sparkle's automatic update checker
     }
 
     func configureStatusItem(_ item: NSStatusItem) {
@@ -414,74 +420,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: update check
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
-    let releaseAPIURL = "https://api.github.com/repos/woolson/VibeGo/releases"
-    let releasePageURL = "https://github.com/woolson/VibeGo/releases/latest"
     let repoURL = "https://github.com/woolson/VibeGo"
-    let releaseLineResetDate = "2026-06-27T00:00:00Z"
-
-    // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
-    // See CLAUDE.md "Update check" for the privacy/behavior notes.
-    func checkForUpdate() {
-        let d = UserDefaults.standard
-        let now = Date().timeIntervalSince1970
-        if now - d.double(forKey: "lastUpdateCheck") < 86400 { return }
-        guard let url = URL(string: releaseAPIURL) else { return }
-        var req = URLRequest(url: url)
-        req.setValue("vibego", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            guard let data = data,
-                  let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
-            guard let obj = releases.first(where: { self.isReleaseInCurrentLine($0) }),
-                  let tag = obj["tag_name"] as? String else {
-                UserDefaults.standard.removeObject(forKey: "latestVersion")
-                UserDefaults.standard.removeObject(forKey: "latestReleaseURL")
-                UserDefaults.standard.set(false, forKey: "latestVersionIsCurrentLine")
-                UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
-                return
-            }
-            let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-            UserDefaults.standard.set(ver, forKey: "latestVersion")
-            if let htmlURL = obj["html_url"] as? String {
-                UserDefaults.standard.set(htmlURL, forKey: "latestReleaseURL")
-            }
-            UserDefaults.standard.set(true, forKey: "latestVersionIsCurrentLine")
-            UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
-        }.resume()
-    }
-
-    func isReleaseInCurrentLine(_ release: [String: Any]) -> Bool {
-        if (release["draft"] as? Bool) == true { return false }
-        if (release["prerelease"] as? Bool) == true { return false }
-        guard let published = release["published_at"] as? String,
-              let publishedDate = ISO8601DateFormatter().date(from: published),
-              let resetDate = ISO8601DateFormatter().date(from: releaseLineResetDate) else { return false }
-        return publishedDate >= resetDate
-    }
-
-    // Numeric component-wise compare so "0.0.10" > "0.0.9".
-    func versionIsNewer(_ a: String, than b: String) -> Bool {
-        let pa = versionComponents(a)
-        let pb = versionComponents(b)
-        for i in 0..<max(pa.count, pb.count) {
-            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
-            if x != y { return x > y }
-        }
-        return false
-    }
-
-    func versionComponents(_ version: String) -> [Int] {
-        version
-            .split { !$0.isNumber }
-            .map { Int($0) ?? 0 }
-    }
-
-    @objc func openLatestRelease() {
-        let cached = UserDefaults.standard.string(forKey: "latestReleaseURL")
-        if let url = URL(string: cached ?? releasePageURL) { NSWorkspace.shared.open(url) }
-    }
 
     @objc func openGitHubRepo() {
         if let url = URL(string: repoURL) { NSWorkspace.shared.open(url) }
+    }
+
+    // Manual entry from the About submenu. Sparkle owns the whole flow — check, download,
+    // EdDSA-verify, install — so this just hands off and lets Sparkle show its update window.
+    @objc func checkForUpdatesNow() {
+        sparkleUpdaterController.checkForUpdates(nil)
     }
 
     // MARK: menu
@@ -491,7 +439,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         // the popup and reopening it always restores the "+n more sessions" summary.
         expandedOverflowSections.removeAll()
         menu.removeAllItems()
-        checkForUpdate() // refreshes the update cache for next open (gated to once a day)
 
         menu.addItem(usageOverviewItem())
         menu.addItem(.separator())
@@ -504,14 +451,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         let aboutItem = NSMenuItem(title: "About", action: nil, keyEquivalent: "")
         aboutItem.submenu = aboutMenu()
         menu.addItem(aboutItem)
-        let d = UserDefaults.standard
-        if d.bool(forKey: "latestVersionIsCurrentLine"),
-           let latest = d.string(forKey: "latestVersion"),
-           versionIsNewer(latest, than: currentVersion) {
-            let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
-            up.target = self
-            menu.addItem(up)
-        }
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
@@ -580,6 +519,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         versionItem.isEnabled = false
         menu.addItem(versionItem)
         menu.addItem(.separator())
+        let checkItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
+        checkItem.target = self
+        menu.addItem(checkItem)
         let githubItem = NSMenuItem(title: "View on GitHub", action: #selector(openGitHubRepo), keyEquivalent: "")
         githubItem.target = self
         menu.addItem(githubItem)

@@ -96,9 +96,11 @@ Click any session in the menu to jump back to where it runs. What opens depends 
 
 ## Install
 
-### Option A — DMG (recommended) 
+### Option A — DMG (recommended)
 
-Signed and notarized. Open it, drag the app to Applications, launch once.
+Open it, drag the app to Applications, launch once. Builds made without an Apple
+Developer ID may require right-click Open or approval in System Settings on first
+launch.
 
 1. Download the latest `VibeGo.dmg` from [Releases](../../releases).
 2. Open it and drag **VibeGo** into Applications.
@@ -107,8 +109,13 @@ Signed and notarized. Open it, drag the app to Applications, launch once.
 
 ### Updating
 
-Download the latest DMG and drag it into Applications (choose **Replace**). 
-Launch it once, it refreshes its hooks on a version change, then restart Claude Code to pick them up.
+VibeGo uses Sparkle for automatic updates. Open **About** from the menu bar item,
+then choose **Check for Updates…** to check, download, and replace the app.
+
+Updates are verified with Sparkle EdDSA signatures even when the app is not
+Developer ID signed. macOS may still show unsigned/unnotarized-app warnings for
+fresh installs. Launch the new version once, it refreshes its hooks on a version
+change, then restart Claude Code to pick them up.
 
 ### Option B — Claude Code plugin
 

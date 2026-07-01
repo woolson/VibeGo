@@ -1,6 +1,10 @@
 # Privacy
 
-VibeGo collects no data and has no servers. It runs entirely on your Mac. Its one network call is a once-a-day check to GitHub's public API for the latest release tag, used only to show "Update available" in the menu. Nothing is sent to the developer (as with any update check or download, GitHub sees the request; the developer never does).
+VibeGo collects no data and has no servers. It runs entirely on your Mac.
+
+For updates, VibeGo checks its Sparkle appcast URL and downloads a release archive only when an update is installed. The appcast/download host can see the request, as with any software update service. Nothing is sent to the developer by the app itself.
+
+Development builds without Sparkle fall back to checking GitHub's public releases API for the latest release tag, used only to show update availability.
 
 ---
 Back to the [README](../README.md).

@@ -107,8 +107,10 @@ VibeGo 是一个轻量的 macOS 菜单栏应用，用来显示 **Claude Code 和
 
 ### 更新
 
-下载最新 DMG，把应用拖到 Applications 并选择 **Replace**。  
-启动一次后，VibeGo 会在版本变化时刷新 hooks；之后重启 Claude Code 让新 hooks 生效。
+VibeGo 内置 Sparkle 自动更新。菜单栏中打开 **About**，点击 **Check for Updates…** 即可检查、下载并替换新版本。
+
+当前发布流程支持没有 Apple Developer ID 的构建：更新包会用 Sparkle EdDSA 签名校验，但 macOS 仍会把应用视为未公证下载。首次安装时可能需要右键打开或在系统设置中允许。  
+启动新版本一次后，VibeGo 会在版本变化时刷新 hooks；之后重启 Claude Code 让新 hooks 生效。
 
 ### 方式 B：Claude Code 插件
 

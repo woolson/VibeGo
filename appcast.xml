@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>VibeGo</title>
+    <item>
+      <title>Version 0.1.8</title>
+      <pubDate>Thu, 02 Jul 2026 01:47:32 +0800</pubDate>
+      <sparkle:version>0.1.8</sparkle:version>
+      <sparkle:shortVersionString>0.1.8</sparkle:shortVersionString>
+      <sparkle:edSignature>43sVWDKGlFwWdIodXaeAtciyxXzb1dcgC3cbyhsCsm/YTsMOdT2cttHU6P0fWy/N7peB2u7Loxutu9tevyQbAw==</sparkle:edSignature>
+      <enclosure url="https://github.com/woolson/VibeGo/releases/download/0.1.8/VibeGo-0.1.8.zip" length="4016403" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>

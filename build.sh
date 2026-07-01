@@ -5,6 +5,33 @@ cd "$(dirname "$0")"
 
 APP="build/VibeGo.app"
 BIN="$APP/Contents/MacOS/VibeGo"
+SPARKLE_DIR="${SPARKLE_DIR:-vendor/Sparkle}"
+SPARKLE_FRAMEWORK="$SPARKLE_DIR/Sparkle.framework"
+SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.3}"
+SPARKLE_TAR_URL="${SPARKLE_TAR_URL:-https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
+if [[ -z "$SPARKLE_PUBLIC_ED_KEY" && -f ".sparkle-public-ed-key" ]]; then
+  SPARKLE_PUBLIC_ED_KEY="$(tr -d '[:space:]' < .sparkle-public-ed-key)"
+fi
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/woolson/VibeGo/main/appcast.xml}"
+
+# Sparkle is the only update channel, so the framework is mandatory. It's kept out of git
+# (.gitignore) and fetched on demand when vendor/Sparkle isn't already populated.
+if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "Fetching Sparkle ${SPARKLE_VERSION}…"
+  mkdir -p "$SPARKLE_DIR"
+  curl -fsSL "$SPARKLE_TAR_URL" -o /tmp/vibego-sparkle.tar.xz
+  tar -xJf /tmp/vibego-sparkle.tar.xz -C "$SPARKLE_DIR" --strip-components=1
+  rm -f /tmp/vibego-sparkle.tar.xz
+  # Strip macOS quarantine so swiftc/codesign can read the downloaded binaries.
+  xattr -cr "$SPARKLE_DIR" 2>/dev/null || true
+fi
+
+if [[ -z "$SPARKLE_PUBLIC_ED_KEY" ]]; then
+  echo "ERROR: Sparkle EdDSA public key missing. Run ./release.sh (or $SPARKLE_DIR/bin/generate_keys)" >&2
+  echo "       and commit .sparkle-public-ed-key before building." >&2
+  exit 1
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -14,8 +41,9 @@ echo "Compiling…"
 # (e.g. macOS 26), making it refuse to launch on older systems despite LSMinimumSystemVersion.
 TMP_ARM64="build/VibeGo-arm64"
 TMP_X86_64="build/VibeGo-x86_64"
-swiftc -O -target arm64-apple-macos12.0 Sources/*.swift -o "$TMP_ARM64" -framework Cocoa
-swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$TMP_X86_64" -framework Cocoa
+SWIFT_FLAGS=(-O -framework Cocoa -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker "@executable_path/../Frameworks")
+swiftc "${SWIFT_FLAGS[@]}" -target arm64-apple-macos12.0 Sources/*.swift -o "$TMP_ARM64"
+swiftc "${SWIFT_FLAGS[@]}" -target x86_64-apple-macos12.0 Sources/*.swift -o "$TMP_X86_64"
 lipo -create "$TMP_ARM64" "$TMP_X86_64" -output "$BIN"
 rm -f "$TMP_ARM64" "$TMP_X86_64"
 
@@ -39,6 +67,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+/usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" "$APP/Contents/Info.plist"
+
 # Bundle the hook scripts (so first-launch self-install works) and the app icon.
 mkdir -p "$APP/Contents/Resources"
 cp hooks/update.js hooks/lifecycle.js hooks/codex-update.js hooks/codex-lifecycle.js hooks/statusline-proxy.js hooks/install.js hooks/uninstall.js "$APP/Contents/Resources/"
@@ -53,6 +84,8 @@ rm -f editor-bridge/*.vsix
 cp editor-bridge/editor-bridge.vsix "$APP/Contents/Resources/editor-bridge.vsix" 2>/dev/null || true
 # Keep the source folder too — install.js reads its package.json for the folder-copy fallback.
 cp -R editor-bridge "$APP/Contents/Resources/editor-bridge"
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 
 # --- Signing / notarization ---
 # For a clean (no Gatekeeper warning) release you need, set up once on this Mac:
@@ -74,10 +107,10 @@ xattr -cr "$APP"
 
 if [[ -n "$SIGN_ID" ]]; then
   echo "Signing with Developer ID: $SIGN_ID"
-  codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
+  codesign --force --deep --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 else
   echo "No Developer ID cert for team $TEAM_ID found — ad-hoc signing (local dev build)."
-  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 fi
 echo "Built $APP"
 
